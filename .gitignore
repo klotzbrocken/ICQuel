@@ -1,0 +1,6 @@
+.DS_Store
+ICQuel.app/
+release/
+*.key
+*.icqtheme/
+_local/
