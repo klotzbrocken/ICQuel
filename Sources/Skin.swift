@@ -57,7 +57,7 @@ struct ButtonBG: View {
             Color.gray98.overlay(Bevel(raised: !pressed)).overlay(isDefault ? Rectangle().stroke(Color.black, lineWidth: 1).padding(-1) : nil)
         case .platinum:
             ZStack { RoundedRectangle(cornerRadius: 3).fill(pressed ? Color(white: 0.62) : Color.gray98); Bevel(raised: !pressed) }
-                .overlay(isDefault ? RoundedRectangle(cornerRadius: 5).stroke(Color.black, lineWidth: 2).padding(-3) : nil)
+                .overlay(isDefault ? RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black, lineWidth: 2.5) : nil)   // default ring stays inside the button so neighbours are not overlapped
         case .aqua:
             if isDefault {
                 Canvas { c, s in
@@ -175,6 +175,41 @@ struct TabLook: ViewModifier {
             content.foregroundColor(on ? .white : .black)
                 .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(colors: on ? [Color(red: 0.5, green: 0.74, blue: 1.0), Color(red: 0.15, green: 0.45, blue: 0.92)] : [.white, Color(white: 0.82)], startPoint: .top, endPoint: .bottom)).padding(.vertical, 1).padding(.horizontal, 1))
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(on ? Color(red: 0.12, green: 0.3, blue: 0.7) : Color(white: 0.55), lineWidth: 1).padding(.vertical, 1).padding(.horizontal, 1))
+        }
+    }
+}
+
+// MARK: scroll bar parts and pop-up buttons of the Mac skins
+struct SkinThumb: View {
+    var body: some View {
+        switch Theme.skin {
+        case .win98: Color.gray98.overlay(Bevel(raised: true))
+        case .platinum:
+            Color.gray98.overlay(Bevel(raised: true)).overlay(VStack(spacing: 1) { ForEach(0..<3, id: \.self) { _ in Color.shade.frame(height: 1) } }.padding(.horizontal, 3))
+        case .aqua:
+            ZStack {
+                Capsule().fill(LinearGradient(stops: [.init(color: Color(red: 0.62, green: 0.82, blue: 1.0), location: 0), .init(color: Color(red: 0.28, green: 0.58, blue: 0.97), location: 0.5),
+                                                      .init(color: Color(red: 0.14, green: 0.45, blue: 0.90), location: 0.52), .init(color: Color(red: 0.42, green: 0.72, blue: 1.0), location: 1)], startPoint: .leading, endPoint: .trailing))
+                Capsule().stroke(Color(red: 0.12, green: 0.32, blue: 0.7), lineWidth: 1)
+            }
+        }
+    }
+}
+/// Pop-up button (status / system menu rows): Platinum = grey bevel with a small triangle, Aqua = gel pill with up/down arrows.
+struct SkinPopup<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        HStack(spacing: 0) { content; Spacer(minLength: 0)
+            switch Theme.skin {
+            case .platinum: Canvas { c, s in var p = Path(); p.move(to: .init(x: 1, y: 3)); p.addLine(to: .init(x: 9, y: 3)); p.addLine(to: .init(x: 5, y: 8)); p.closeSubpath(); c.fill(p, with: .color(.black)) }.frame(width: 11, height: 11).padding(.trailing, 6)
+            default:
+                ZStack { Capsule().fill(LinearGradient(colors: [Color(red: 0.5, green: 0.75, blue: 1.0), Color(red: 0.13, green: 0.43, blue: 0.9)], startPoint: .top, endPoint: .bottom))
+                    Canvas { c, s in
+                        for up in [true, false] { var p = Path(); let y = up ? 5.0 : 11.0
+                            if up { p.move(to: .init(x: 3, y: y + 2)); p.addLine(to: .init(x: 9, y: y + 2)); p.addLine(to: .init(x: 6, y: y - 1.5)) } else { p.move(to: .init(x: 3, y: y - 2)); p.addLine(to: .init(x: 9, y: y - 2)); p.addLine(to: .init(x: 6, y: y + 1.5)) }
+                            p.closeSubpath(); c.fill(p, with: .color(.white)) }
+                    }.frame(width: 12, height: 16) }.frame(width: 18, height: 16).padding(.trailing, 4)
+            }
         }
     }
 }

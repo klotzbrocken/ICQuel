@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SQLite3
+import Contacts
 
 /// Messages bridge (iMessage via the Messages app of this Mac).
 /// Sending goes through AppleScript (needs the one-time Automation permission), receiving reads ~/Library/Messages/chat.db
@@ -77,6 +78,91 @@ enum Bridge {
         else if len == 0x82 { guard p + 4 <= bytes.count else { return nil }; len = (0..<4).reduce(0) { $0 | Int(bytes[p + $1]) << (8 * $1) }; p += 4 }
         guard len > 0, p + len <= bytes.count else { return nil }
         return String(data: Data(bytes[p..<p + len]), encoding: .utf8)
+    }
+
+    /// Of the newest `n` incoming messages of one handle: how many are still unread in the Messages app.
+    static func unreadAmongLatest(handle: String, n: Int) -> Int {
+        guard let db = open() else { return n }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT m.is_read, h.id FROM message m JOIN handle h ON m.handle_id = h.ROWID
+        WHERE m.is_from_me = 0 AND (m.associated_message_type IS NULL OR m.associated_message_type = 0) AND m.cache_roomnames IS NULL ORDER BY m.ROWID DESC LIMIT 600
+        """
+        var st: OpaquePointer?
+        defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return n }
+        var seen = 0, unread = 0
+        while sqlite3_step(st) == SQLITE_ROW, seen < n {
+            guard let hid = sqlite3_column_text(st, 1).map({ String(cString: $0) }), same(hid, handle) || hid == handle else { continue }
+            seen += 1; if sqlite3_column_int(st, 0) == 0 { unread += 1 }
+        }
+        return unread
+    }
+    struct Conversation { var handle: String; var last: String; var date: Date; var count: Int }
+    /// The most recent one-to-one conversations (newest first), found in the last few thousand messages.
+    static func conversations(limit: Int) -> [Conversation] {
+        guard let db = open() else { return [] }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT m.text, m.attributedBody, m.date, h.id FROM message m JOIN handle h ON m.handle_id = h.ROWID
+        WHERE (m.associated_message_type IS NULL OR m.associated_message_type = 0) AND m.cache_roomnames IS NULL ORDER BY m.ROWID DESC LIMIT 4000
+        """
+        var st: OpaquePointer?
+        defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return [] }
+        var out: [Conversation] = []
+        while sqlite3_step(st) == SQLITE_ROW {
+            guard let hid = sqlite3_column_text(st, 3).map({ String(cString: $0) }) else { continue }
+            if let i = out.firstIndex(where: { same($0.handle, hid) || $0.handle == hid }) { out[i].count += 1; continue }
+            guard out.count < limit else { continue }
+            var text = sqlite3_column_text(st, 0).map { String(cString: $0) } ?? ""
+            if text.isEmpty, let p = sqlite3_column_blob(st, 1) { text = decodeAttributedBody(Data(bytes: p, count: Int(sqlite3_column_bytes(st, 1)))) ?? "" }
+            text = text.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            out.append(Conversation(handle: hid, last: text.isEmpty ? "[Attachment]" : text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000), count: 1))
+        }
+        return out
+    }
+    /// Names from the Contacts app for phone numbers / e-mail addresses (asks for Contacts access once; without it the handle is shown).
+    static func names(for handles: [String], done: @escaping ([String: String]) -> Void) {
+        let store = CNContactStore()
+        store.requestAccess(for: .contacts) { ok, err in
+            if !ok { NSLog("Contacts access not granted: \(err?.localizedDescription ?? "denied")") }
+            guard ok else { done([:]); return }
+            var out: [String: String] = [:]
+            let keys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactNicknameKey, CNContactOrganizationNameKey, CNContactPhoneNumbersKey, CNContactEmailAddressesKey] as [CNKeyDescriptor]
+            // read the address book once and match by digits / lower-case address (robust against any number format)
+            try? store.enumerateContacts(with: CNContactFetchRequest(keysToFetch: keys)) { c, _ in
+                var n = [c.givenName, c.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+                if n.isEmpty { n = c.nickname.isEmpty ? c.organizationName : c.nickname }
+                guard !n.isEmpty else { return }
+                let ids = c.phoneNumbers.map { $0.value.stringValue } + c.emailAddresses.map { $0.value as String }
+                for h in handles where out[h] == nil && ids.contains(where: { same($0, h) }) { out[h] = n }
+            }
+            done(out)
+        }
+    }
+    struct Recent { var fromMe: Bool; var text: String; var date: Date }
+    /// The last `limit` messages (both directions) exchanged with one handle, oldest first.
+    static func recent(handle: String, limit: Int) -> [Recent] {
+        guard let db = open() else { return [] }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT m.text, m.attributedBody, m.date, m.is_from_me, h.id FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
+        WHERE (m.associated_message_type IS NULL OR m.associated_message_type = 0) AND m.cache_roomnames IS NULL ORDER BY m.ROWID DESC LIMIT 800
+        """
+        var st: OpaquePointer?
+        defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return [] }
+        var out: [Recent] = []
+        while sqlite3_step(st) == SQLITE_ROW, out.count < limit {
+            guard let hid = sqlite3_column_text(st, 4).map({ String(cString: $0) }), same(hid, handle) else { continue }
+            var text = sqlite3_column_text(st, 0).map { String(cString: $0) } ?? ""
+            if text.isEmpty, let p = sqlite3_column_blob(st, 1) { text = decodeAttributedBody(Data(bytes: p, count: Int(sqlite3_column_bytes(st, 1)))) ?? "" }
+            text = text.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty { text = "[Attachment]" }
+            out.append(Recent(fromMe: sqlite3_column_int(st, 3) != 0, text: text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000)))
+        }
+        return out.reversed()
     }
 
     // MARK: handles

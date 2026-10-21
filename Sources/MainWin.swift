@@ -31,14 +31,18 @@ private struct Arrow: View {
         }
     }
 }
-private struct Dither: View { // the checkered scrollbar track
+private struct Dither: View { // scroll bar track
     var body: some View {
-        if Theme.skin != .win98 { Color(white: 0.96).overlay(Rectangle().stroke(Color.shade, lineWidth: 1)) } else { checker }
+        switch Theme.skin {
+        case .win98: checker(.white, Color.gray98)
+        case .platinum: checker(Color(white: 0.93), Color(white: 0.68)).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+        case .aqua: LinearGradient(colors: [Color(white: 0.82), Color(white: 0.97)], startPoint: .leading, endPoint: .trailing).overlay(Rectangle().stroke(Color(white: 0.6), lineWidth: 1))
+        }
     }
-    var checker: some View {
+    func checker(_ a: Color, _ b: Color) -> some View {
         Canvas { c, s in
-            for y in 0..<Int(s.height) { for x in 0..<Int(s.width) where (x + y) % 2 == 0 { c.fill(Path(CGRect(x: x, y: y, width: 1, height: 1)), with: .color(.white)) } }
-        }.background(Color.gray98)
+            for y in 0..<Int(s.height) { for x in 0..<Int(s.width) where (x + y) % 2 == 0 { c.fill(Path(CGRect(x: x, y: y, width: 1, height: 1)), with: .color(a)) } }
+        }.background(b)
     }
 }
 
@@ -53,7 +57,7 @@ struct MainView: View {
     var body: some View {
         GeometryReader { g in
             let W = floor(g.size.width), H = floor(g.size.height)
-            Group { if s.simpleMode { simpleBody(W, H) } else { advancedBody(W, H) } }.frame(width: W, height: H, alignment: .topLeading)
+            Group { if Theme.skin == .platinum { platinumBody(W, H) } else if s.simpleMode { simpleBody(W, H) } else { advancedBody(W, H) } }.frame(width: W, height: H, alignment: .topLeading)
         }
         .onChange(of: s.uin) { WinMgr.shared.setTitle("main", $0) }
         .onChange(of: s.flash) { _ in ICQ.refreshTray() }
@@ -67,9 +71,25 @@ struct MainView: View {
             HStack(spacing: 5) { Pix(name: "contact", w: 16); Text("System Menu").font(rf()).foregroundColor(.white) }.padding(.leading, 3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).background(Color.navy).overlay(Bevel(raised: false))
                 .contentShape(Rectangle()).onTapGesture { ICQ.mainMenu() }.box(2, H - 49, W - 4, 22)
-            Button { ICQ.openAbout() } label: { Pix(name: "icqlogo", w: 44, h: 15) }.buttonStyle(Raised()).box(2, H - 25, 50, 22)
+            Button { ICQ.openAbout() } label: { Image(nsImage: pic("icqlogo")).interpolation(.none).resizable().scaledToFit().frame(width: 44, height: 18) }.buttonStyle(Raised()).box(2, H - 25, 50, 22)
             Sunken98 { HStack(spacing: 4) { Pix(name: s.status.rawValue, w: 16); Text(s.status.panelLabel).font(rf()).foregroundColor(.black) }.padding(.leading, 3) }
                 .contentShape(Rectangle()).onTapGesture { ICQ.statusMenu() }.box(55, H - 25, W - 55, 22)
+        }
+    }
+
+    /// Row / pop-up look: Win98 sunken field, Platinum bevel + triangle, Aqua gel pill.
+    @ViewBuilder func popup<C: View>(@ViewBuilder _ c: () -> C) -> some View {
+        if Theme.skin == .win98 { Sunken98 { c() } }
+        else { SkinPopup { c() }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).background(ButtonBG(pressed: false)) }
+    }
+    // MARK: Mac OS 8/9 layout: list with scroll bar, then "System", "Add/Find Users" and the status pop-up (as in ICQ for Mac)
+    func platinumBody(_ W: CGFloat, _ H: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            list(simple: false, w: W - 4, h: H - 84).box(3, 3, W - 4, H - 84)
+            Button { ICQ.mainMenu() } label: { HStack(spacing: 5) { Pix(name: "contact", w: 16); Text("System").font(rf()); Spacer(minLength: 0) }.padding(.leading, 6) }.buttonStyle(Raised()).box(3, H - 78, W - 6, 22)
+            Button { ICQ.openAdd() } label: { HStack(spacing: 5) { Pix(name: "usertab", w: 16); Text("Add/Find Users").font(rf()); Spacer(minLength: 0) }.padding(.leading, 6) }.buttonStyle(Raised()).box(3, H - 53, W - 6, 22)
+            popup { HStack(spacing: 4) { Pix(name: s.status.rawValue, w: 16); Text(s.status.panelLabel).font(rf()).foregroundColor(.black) }.padding(.leading, 6) }
+                .contentShape(Rectangle()).onTapGesture { ICQ.statusMenu() }.box(3, H - 28, W - 6, 24)
         }
     }
 
@@ -84,10 +104,10 @@ struct MainView: View {
             Button { ICQ.openAdd() } label: { Pix(name: "addusers") }.buttonStyle(Raised()).box(2, H - 71, o.icqNow ? half : W - 4, 22)
             if o.icqNow { Button { openWeb("https://myretromac.app") } label: { Pix(name: "icqnow") }.buttonStyle(Raised()).box(4 + half, H - 71, half, 22) }
             if o.services { Button { ICQ.servicesMenu() } label: { Pix(name: "services") }.buttonStyle(Raised()).box(2, H - 47, 50, 22) }
-            Sunken98 { HStack(spacing: 5) { Pix(name: "contact", w: 16); Text("System Menu").font(rf()).foregroundColor(.black) }.padding(.leading, 3) }
+            popup { HStack(spacing: 5) { Pix(name: "contact", w: 16); Text("System Menu").font(rf()).foregroundColor(.black).lineLimit(1).minimumScaleFactor(0.75) }.padding(.leading, 3) }
                 .contentShape(Rectangle()).onTapGesture { ICQ.mainMenu() }.box(o.services ? 55 : 2, H - 47, o.services ? W - 55 : W - 4, 22)
-            Button { ICQ.openAbout() } label: { Pix(name: "icqlogo", w: 44, h: 15) }.buttonStyle(Raised()).box(2, H - 22, 50, 22)
-            Sunken98 { HStack(spacing: 4) { Pix(name: s.status.rawValue, w: 16); Text(s.status.panelLabel).font(rf()).foregroundColor(.black) }.padding(.leading, 3) }
+            Button { ICQ.openAbout() } label: { Image(nsImage: pic("icqlogo")).interpolation(.none).resizable().scaledToFit().frame(width: 44, height: 18) }.buttonStyle(Raised()).box(2, H - 22, 50, 22)
+            popup { HStack(spacing: 4) { Pix(name: s.status.rawValue, w: 16); Text(s.status.panelLabel).font(rf()).foregroundColor(.black) }.padding(.leading, 3) }
                 .contentShape(Rectangle()).onTapGesture { ICQ.statusMenu() }.box(55, H - 22, W - 55, 22)
         }
     }
@@ -131,14 +151,14 @@ struct MainView: View {
                         ForEach(on + live + off) { row($0, offline: !(on + live).contains($0)) }
                     } else if tab == 0 {
                         header("Online"); ForEach(on) { row($0, offline: false) }
-                        if o.showIMessage { header("iMessage"); ForEach(live) { row($0, offline: false) } }
+                        if o.showIMessage { header("iMessage"); ForEach(live) { row($0, offline: false) }; if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() }.padding(.horizontal, 4).padding(.vertical, 2) } }
                         if o.showOffline { header("Offline"); ForEach(off) { row($0, offline: true) } }
                     } else {
                         ForEach((on + live + off).sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live).contains(c)) }
                     }
                     if !simple {
                         // the button block sits at the bottom of the list: hidden rows/buttons never leave gaps below it
-                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (o.showOffline ? 1 : 0)) : 20 * (on.count + live.count + off.count)
+                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (o.showOffline ? 1 : 0)) + (o.showIMessage && s.bridgeEnabled ? 19 : 0) : 20 * (on.count + live.count + off.count)
                         let nb = CGFloat((o.btnInstructions ? 1 : 0) + 1 + (o.btnRandom ? 1 : 0) + (o.btnWeb ? 1 : 0) + (o.btnCool ? 1 : 0))
                         Color.clear.frame(height: max(0, viewH - CGFloat(rows) - (nb * 15 + (nb - 1) * 2 + 10)))
                         VStack(spacing: 2) {
@@ -160,7 +180,7 @@ struct MainView: View {
                 Group {
                     Button {} label: { Arrow(up: true) }.buttonStyle(Raised()).box(boxW - 17, 2, 15, 16)
                     Dither().box(boxW - 17, 18, 15, track)
-                    ZStack { Color.gray98 }.overlay(Bevel(raised: true)).box(boxW - 17, 18 + thumbY, 15, thumbH)
+                    SkinThumb().box(boxW - 17, 18 + thumbY, 15, thumbH)
                     Button {} label: { Arrow(up: false) }.buttonStyle(Raised()).box(boxW - 17, 2 + 16 + track, 15, 16)
                 }
             }
@@ -186,7 +206,7 @@ struct MainView: View {
         }.padding(.leading, 5).frame(height: 20).background(sel ? Color.navy : Color.clear).contentShape(Rectangle())
             .onTapGesture(count: 2) { pending ? ICQ.openIncoming(c.uin) : ICQ.openSend(c.uin) }
             .onTapGesture { s.selected = c.uin }
-            .overlay(RightClick { s.selected = c.uin; popMenu([MItem("Send Message") { ICQ.openSend(c.uin) }, MItem("History") { ICQ.openArchive(c.uin) }] + (c.isBot ? [MItem("AI Assistant Mode", checked: c.isAssistant) { s.toggleAssistant(c.uin) }] : []) + [.separator(), MItem("Delete") { ICQ.confirmDelete(c.uin) }]) })
+            .overlay(RightClick { s.selected = c.uin; popMenu([MItem("Send Message") { ICQ.openSend(c.uin) }, MItem("History") { ICQ.openArchive(c.uin) }] + ICQ.contactItems(c) + (c.isBot ? [MItem("AI Assistant Mode", checked: c.isAssistant) { s.toggleAssistant(c.uin) }] : []) + [.separator(), MItem("Delete") { ICQ.confirmDelete(c.uin) }]) })
     }
 }
 

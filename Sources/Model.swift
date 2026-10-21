@@ -25,7 +25,12 @@ struct Contact: Identifiable, Codable, Hashable {
     var initiative: Bool? = nil    // bot writes first from time to time (default on)
     var preset: String? = nil      // relationship preset id (see Presets); nil/"custom" = description only
     var bridge: String? = nil      // phone number / e-mail of an iMessage contact reached through the Messages bridge
+    var email: String? = nil, phone: String? = nil   // optional details for "Send Mail" and FaceTime
     var isLive: Bool { bridge != nil }
+    /// Address for "Send Mail": the e-mail field, or the iMessage handle when that is an e-mail address.
+    var mailAddr: String? { if let e = email, !e.isEmpty { return e }; if let b = bridge, b.contains("@") { return b }; return nil }
+    /// Number / address for FaceTime: the phone field, or the iMessage handle.
+    var callTarget: String? { if let p = phone, !p.isEmpty { return p }; return bridge }
     var id: String { uin }
     var isBot: Bool { persona != nil }
     var isAssistant: Bool { assistant ?? false }
@@ -78,6 +83,7 @@ private struct Saved: Codable {
     var opts: MainOpts? = nil
     var appName: String? = nil
     var bridgeEnabled: Bool? = nil, bridgeLast: Int64? = nil
+    var autoAway: Bool? = nil, autoAwayMin: Int? = nil, autoAwayDND: Bool? = nil
 }
 
 /// Contacts, bots, history and settings live in ~/Library/Application Support/ICQ99b/store.json (one backup copy is kept),
@@ -149,6 +155,9 @@ final class Store: ObservableObject {
     @Published var bridgeEnabled = false
     @Published var bridgeStatus = "Off"
     var bridgeLast: Int64 = 0
+    @Published var autoAway = false          // switch to Away / DND after some minutes without keyboard or mouse use
+    @Published var autoAwayMin = 15
+    @Published var autoAwayDND = false       // false = Away, true = Do Not Disturb
     @Published var botMin = 5
     @Published var botMax = 20
     @Published var history: [String: [Msg]] = [:]
@@ -171,6 +180,7 @@ final class Store: ObservableObject {
             freqEnabled = s.freqEnabled; freqMode = s.freqMode; minutes = s.minutes; demoFirst = s.demoFirst
             aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; simpleMode = s.simpleMode ?? false
             botInit = s.botInit ?? true; botMin = s.botMin ?? 5; botMax = s.botMax ?? 20; opts = s.opts ?? MainOpts(); appName = s.appName ?? "ICQuel"; bridgeEnabled = s.bridgeEnabled ?? false; bridgeLast = s.bridgeLast ?? 0
+            autoAway = s.autoAway ?? false; autoAwayMin = s.autoAwayMin ?? 15; autoAwayDND = s.autoAwayDND ?? false
         }
         online = Set(contacts.filter { $0.isBot || $0.isLive }.map(\.uin))   // AI chatbots and bridged contacts are always shown online
     }
@@ -188,7 +198,7 @@ final class Store: ObservableObject {
     }
     func save() {
         let s = Saved(uin: uin, nick: nick, status: status, sounds: sounds, contacts: contacts, freqEnabled: freqEnabled,
-                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast)
+                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND)
         if let d = try? JSONEncoder().encode(s) { Persist.write(d) }
     }
     static func newUin() -> String { String(Int.random(in: 10_000_000...99_999_999)) }
@@ -205,6 +215,25 @@ final class Store: ObservableObject {
         history[uin, default: []].append(Msg(dir: dir, text: text, t: t))
         if history[uin]!.count > 500 { history[uin]!.removeFirst() }
         save()
+    }
+    /// Away / N/A / Occupied / Do Not Disturb: no sample messages and no chatbot messages of their own (replies to something you wrote still come).
+    /// Real iMessages are never held back.
+    var quiet: Bool { [.away, .na, .occupied, .dnd].contains(status) }
+    private var idleTimer: Timer?, autoApplied = false, prevStatus = Status.online
+    func startIdleWatch() {
+        idleTimer?.invalidate()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.idleCheck() }
+    }
+    func stopIdleWatch() { idleTimer?.invalidate() }
+    private func idleCheck() {
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        let target: Status = autoAwayDND ? .dnd : .away
+        if autoApplied {
+            if status != target { autoApplied = false }                       // changed by hand meanwhile: leave it alone
+            else if idle < 5 { status = prevStatus; autoApplied = false; save(); ICQ.refreshTray() }
+        } else if autoAway, !uin.isEmpty, idle >= Double(max(1, autoAwayMin)) * 60, status == .online || status == .ffc {
+            prevStatus = status; status = target; autoApplied = true; ICQ.refreshTray()
+        }
     }
     func simulatePresence() { online = Set(contacts.filter { $0.isBot || $0.isLive || Double.random(in: 0...1) < 0.65 }.map(\.uin)) }
     func shuffleOne() { // simulated contacts come and go; AI chatbots never leave
@@ -236,6 +265,7 @@ final class Store: ObservableObject {
         } else if now >= nextAt { deliver(); nextAt = now.addingTimeInterval(Double(minutes) * 60) }
     }
     func deliver(to chosen: Contact? = nil, text: String? = nil) {
+        if chosen == nil && quiet { return }                                  // scheduled sample message while Away / DND
         guard status != .offline, let c = chosen ?? contacts.filter({ online.contains($0.uin) && !$0.isLive }).randomElement() else { return }
         var t = text ?? ""
         if text == nil { var i: Int; repeat { i = Int.random(in: 0..<dummyMessages.count) } while i == lastMsg; lastMsg = i; t = dummyMessages[i] }
@@ -310,10 +340,18 @@ final class Store: ObservableObject {
     private func bridgePoll() {
         guard !polling, status != .offline, contacts.contains(where: \.isLive) else { return }
         polling = true; let after = bridgeLast
+        let pending = contacts.compactMap { c -> (String, String, Int)? in
+            guard let h = c.bridge, let n = unread[c.uin]?.count, n > 0 else { return nil }; return (c.uin, h, n)
+        }
         DispatchQueue.global(qos: .utility).async {
             let msgs = Bridge.incoming(after: after)
+            let states = pending.map { ($0.0, Bridge.unreadAmongLatest(handle: $0.1, n: $0.2)) }
             DispatchQueue.main.async {
                 self.polling = false
+                // read in the Messages app (on this Mac or another device) = read here as well
+                var changed = false
+                for (u, k) in states { if let cur = self.unread[u]?.count, k < cur { self.unread[u] = k == 0 ? nil : Array(self.unread[u]!.suffix(k)); changed = true } }
+                if changed { ICQ.refreshTray() }
                 guard let top = msgs.last?.rowid else { return }
                 self.bridgeLast = top; self.save()
                 for m in msgs { if let c = self.contacts.first(where: { $0.bridge.map { Bridge.same($0, m.handle) } ?? false }) { self.deliver(to: c, text: m.text) } }
@@ -324,7 +362,13 @@ final class Store: ObservableObject {
         let n = name.trimmingCharacters(in: .whitespaces), h = handle.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty, !h.isEmpty else { return nil }
         let c = Contact(name: n, uin: Store.newUin(), bridge: h)
-        contacts.append(c); online.insert(c.uin); save(); return c
+        contacts.append(c); online.insert(c.uin); save()
+        DispatchQueue.global(qos: .utility).async {      // fill the history with the last 5 iMessages (needs Full Disk Access; silently skipped otherwise)
+            let recent = Bridge.recent(handle: h, limit: 5)
+            guard !recent.isEmpty else { return }
+            DispatchQueue.main.async { self.history[c.uin] = recent.map { Msg(dir: $0.fromMe ? "out" : "in", text: $0.text, t: $0.date) }; self.save() }
+        }
+        return c
     }
 
     // MARK: chatbots that write first, at randomised intervals
@@ -340,7 +384,7 @@ final class Store: ObservableObject {
         return first ? .random(in: 45...Double(lo) * 60) : .random(in: Double(lo) * 60...Double(hi) * 60)
     }
     private func botTick() {
-        guard botInit, status != .offline, !uin.isEmpty else { return }
+        guard botInit, status != .offline, !quiet, !uin.isEmpty else { return }
         let now = Date()
         for c in contacts where c.isBot && c.startsChats {
             guard let n = botNext[c.uin] else { botNext[c.uin] = now.addingTimeInterval(gap(first: true)); continue }
@@ -350,7 +394,7 @@ final class Store: ObservableObject {
         }
     }
     func botInitiate(_ c: Contact) {
-        guard let persona = c.persona, status != .offline else { return }
+        guard let persona = c.persona, status != .offline, !quiet else { return }
         if aiEnabled && !keyLoaded { loadKeyAsync { self.botInitiate(c) }; return }
         guard aiEnabled, !apiKey.isEmpty else { deliver(to: c); return }
         let hist = history[c.uin] ?? [], key = apiKey, model = apiModel, me = nick

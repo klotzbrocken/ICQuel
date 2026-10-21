@@ -164,3 +164,104 @@ struct BotView: View {
         }.padding(10)
     }
 }
+
+// MARK: Edit Contact: nickname, e-mail ("Send Mail") and phone number (FaceTime)
+struct ContactEditView: View {
+    let uin: String
+    @State private var name: String
+    @State private var email: String
+    @State private var phone: String
+    static let size = CGSize(width: 360, height: 250)
+    init(uin: String) {
+        self.uin = uin; let c = Store.shared.contact(uin)
+        _name = State(initialValue: c?.name ?? ""); _email = State(initialValue: c?.email ?? ""); _phone = State(initialValue: c?.phone ?? "")
+    }
+    var body: some View {
+        let c = Store.shared.contact(uin)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Nickname:"); RField(text: $name)
+            Text("E-mail (\"Send Mail…\" opens your mail app):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? $0 : nil } ?? "name@example.com", text: $email)
+            Text("Phone (FaceTime Video / Audio):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? nil : $0 } ?? "+49 151 1234567", text: $phone)
+            if let b = c?.bridge { Text("iMessage address: \(b) (used when the fields stay empty)").foregroundColor(.hint).font(rf(10)).fixedSize(horizontal: false, vertical: true) }
+            Spacer(minLength: 0)
+            HStack { Spacer()
+                RButton(title: "Cancel") { WinMgr.shared.close("edit" + uin) }
+                RButton(title: "OK", isDefault: true) {
+                    let s = Store.shared
+                    if let i = s.contacts.firstIndex(where: { $0.uin == uin }) {
+                        let n = name.trimmingCharacters(in: .whitespaces); if !n.isEmpty { s.contacts[i].name = n }
+                        s.contacts[i].email = email.trimmingCharacters(in: .whitespaces).isEmpty ? nil : email.trimmingCharacters(in: .whitespaces)
+                        s.contacts[i].phone = phone.trimmingCharacters(in: .whitespaces).isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces)
+                        s.save()
+                    }
+                    WinMgr.shared.close("edit" + uin)
+                }
+            }
+        }.padding(14).frame(width: ContactEditView.size.width, height: ContactEditView.size.height, alignment: .topLeading)
+    }
+}
+
+// MARK: Import from Messages: pick recent iMessage conversations instead of typing every contact
+final class ConvModel: ObservableObject {
+    @Published var convs: [Bridge.Conversation] = []
+    @Published var names: [String: String] = [:]
+    @Published var picked = Set<String>()
+    @Published var state = "Not loaded yet."
+    private let s = Store.shared
+    func known(_ h: String) -> Bool { s.contacts.contains { $0.bridge.map { Bridge.same($0, h) || $0 == h } ?? false } }
+    func load() {
+        state = "Reading Messages…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let list = Bridge.conversations(limit: 15)
+            DispatchQueue.main.async {
+                self.convs = list; self.picked = Set(list.prefix(5).filter { !self.known($0.handle) }.map(\.handle))
+                if list.isEmpty { self.state = Bridge.checkAccess() == .ok ? "No conversations found." : "Messages cannot be read yet. Give this app Full Disk Access first, restart it and load again." }
+                let mine = self.s.contacts.compactMap(\.bridge)
+                Bridge.names(for: list.map(\.handle) + mine) { n in DispatchQueue.main.async {
+                    self.names = n
+                    // contacts added earlier under their number / address get the real name now
+                    func bare(_ t: String) -> Bool { t.contains("@") || t.filter(\.isNumber).count >= 6 && t.filter(\.isLetter).isEmpty }
+                    for i in self.s.contacts.indices { if let h = self.s.contacts[i].bridge, bare(self.s.contacts[i].name), let nm = n.first(where: { Bridge.same($0.key, h) || $0.key == h })?.value { self.s.contacts[i].name = nm } }
+                    self.s.save()
+                } }
+            }
+        }
+    }
+    func importPicked() {
+        for c in convs where picked.contains(c.handle) && !known(c.handle) { _ = s.addBridgeContact(names[c.handle] ?? c.handle, handle: c.handle) }
+        if !picked.isEmpty && !s.bridgeEnabled { s.bridgeEnabled = true; s.save(); s.startBridge() }
+    }
+}
+/// The tick list of recent conversations (used by the import window and the setup assistant).
+struct ConvList: View {
+    @ObservedObject var m: ConvModel
+    var body: some View {
+        Sunken { ScrollView { VStack(alignment: .leading, spacing: 5) {
+            if m.convs.isEmpty { Text(m.state).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
+            ForEach(m.convs, id: \.handle) { c in
+                VStack(alignment: .leading, spacing: 1) {
+                    RCheck(title: (m.names[c.handle] ?? c.handle) + (m.names[c.handle] == nil ? "" : "  (\(c.handle))") + (m.known(c.handle) ? "  – already added" : ""),
+                           on: Binding(get: { m.picked.contains(c.handle) }, set: { if $0 { m.picked.insert(c.handle) } else { m.picked.remove(c.handle) } }))
+                    Text(c.last).font(rf(10)).foregroundColor(.hint).lineLimit(1).padding(.leading, 24)
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .topLeading).padding(8) } }
+    }
+}
+struct MessagesImportView: View {
+    static let size = CGSize(width: 440, height: 480)
+    @StateObject private var m = ConvModel()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Choose the conversations to show as contacts. Only the ones you tick are used; the last 5 messages of each are loaded into its history.").fixedSize(horizontal: false, vertical: true)
+            ConvList(m: m).frame(maxHeight: .infinity)
+            HStack {
+                RButton(title: "Select all") { m.picked = Set(m.convs.filter { !m.known($0.handle) }.map(\.handle)) }
+                RButton(title: "None") { m.picked = [] }
+                Spacer()
+                RButton(title: "Cancel") { WinMgr.shared.close("msgimport") }
+                RButton(title: "Import", isDefault: true) { m.importPicked(); WinMgr.shared.close("msgimport") }.disabled(m.picked.isEmpty)
+            }
+        }.padding(14).frame(width: MessagesImportView.size.width, height: MessagesImportView.size.height, alignment: .topLeading).onAppear { m.load() }
+    }
+}

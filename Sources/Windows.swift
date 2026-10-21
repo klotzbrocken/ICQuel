@@ -66,6 +66,9 @@ struct PrefsView: View {
     @State private var mode = Store.shared.freqMode
     @State private var mins = String(Store.shared.minutes)
     @State private var first = Store.shared.demoFirst
+    @State private var autoAway = Store.shared.autoAway
+    @State private var autoMin = String(Store.shared.autoAwayMin)
+    @State private var autoDND = Store.shared.autoAwayDND
     @State private var key = Store.shared.apiKey
     @State private var ai = Store.shared.aiEnabled
     @State private var showKey = false
@@ -87,14 +90,16 @@ struct PrefsView: View {
     @State private var optModern = Theme.isModern
     @State private var bridgeMsg = ""
     /// Retro window height per page, so there are no large empty grey areas.
-    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 270, 3: 470, 4: 530, 5: 395, 6: 490, 7: 400, 8: 450]
+    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 440, 3: 470, 4: 530, 5: 395, 6: 490, 7: 400, 8: 450]
     static let icons: [(String, Color)] = [("person.crop.circle.fill", .blue), ("person.2.fill", .green), ("tray.and.arrow.down.fill", .orange), ("text.bubble.fill", .teal), ("speaker.wave.2.fill", .pink),
                                            ("lock.fill", .gray), ("sparkles", .purple), ("macwindow", .indigo), ("message.badge.filled.fill", Color(red: 0.2, green: 0.78, blue: 0.35))]
+    /// The first page grows with the number of installed themes (+ room for the fan-made note).
+    static func height(_ t: Int) -> CGFloat { t == 0 ? 380 + CGFloat(max(0, Assets.choices().count - 4)) * 17 + 45 : (heights[t] ?? 520) }
     static let pages = ["My Details", "Contact List", "Incoming", "Messages", "Sounds", "Security", "AI Chat", "Main Window", "Bridge"]
     var body: some View {
         (Theme.isModern ? AnyView(modernBody) : AnyView(classicBody))
             .onAppear { if !s.keyLoaded { s.loadKeyAsync() } }
-            .onChange(of: tab) { t in if !Theme.isModern { WinMgr.shared.resize("prefs", 600, PrefsView.heights[t] ?? 520) } }
+            .onChange(of: tab) { t in if !Theme.isModern { WinMgr.shared.resize("prefs", 600, PrefsView.height(t)) } }
             .onChange(of: s.apiKey) { if key.isEmpty { key = $0 } }
     }
     var modernBody: some View {
@@ -209,6 +214,12 @@ struct PrefsView: View {
             }.padding(.top, 6)
             RCheck(title: "Send a first message 10 seconds after start", on: $first)
             RButton(title: "Receive one now", minWidth: 130) { s.deliver() }.padding(.top, 6)
+            RGroup(title: "Status when I am away from the keyboard") {
+                RCheck(title: "Switch my status automatically when I do not use the Mac", on: $autoAway)
+                HStack(spacing: 5) { Text("after"); RField(text: $autoMin).frame(width: 50); Text("minutes to") }
+                HStack(spacing: 14) { RRadio(title: "Away", on: !autoDND) { autoDND = false }; RRadio(title: "Do Not Disturb", on: autoDND) { autoDND = true } }
+                Text("While Away, N/A, Occupied or Do Not Disturb is set, no sample messages and no chatbot messages arrive (not even silently). Real iMessages still do. The status switches back when you use the Mac again.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
+            }.padding(.top, 8)
         case 3:
             Text("Sample messages (\(dummyMessages.count)) – delivered at random:")
             Sunken { ScrollView { VStack(alignment: .leading, spacing: 0) {
@@ -231,6 +242,7 @@ struct PrefsView: View {
             if !bridgeMsg.isEmpty { Text(bridgeMsg).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
             Text("If the app is not in the Full Disk Access list: click “Show app in Finder”, then drag the app into the list (or use the + button) and switch it on. Restart the app afterwards. Button 2 shows the macOS prompt that adds the app under Privacy & Security > Automation.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
             Text("Receiving needs Full Disk Access for this app, sending needs the Automation permission for Messages. Only the contacts listed below are read; nothing else is read, stored or sent. AI chatbots never answer bridged chats.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+            RButton(title: "Import from Messages…", minWidth: 170) { ICQ.openMessagesImport() }.padding(.top, 2)
             RGroup(title: "Connected iMessage contacts") {
                 Sunken { ScrollView { VStack(spacing: 0) {
                     ForEach(s.contacts.filter(\.isLive)) { c in
@@ -321,7 +333,7 @@ struct PrefsView: View {
     func apply() {
         s.nick = nick.trimmingCharacters(in: .whitespaces).isEmpty ? s.nick : nick.trimmingCharacters(in: .whitespaces)
         s.uin = uin.trimmingCharacters(in: .whitespaces).isEmpty ? s.uin : uin.trimmingCharacters(in: .whitespaces)
-        s.sounds = sounds; s.freqEnabled = enabled; s.freqMode = mode; s.minutes = max(1, Int(mins) ?? s.minutes); s.demoFirst = first
+        s.sounds = sounds; s.freqEnabled = enabled; s.freqMode = mode; s.minutes = max(1, Int(mins) ?? s.minutes); s.demoFirst = first; s.autoAway = autoAway; s.autoAwayMin = max(1, Int(autoMin) ?? s.autoAwayMin); s.autoAwayDND = autoDND
         if themeChoice != Assets.currentChoiceId() { Assets.select(themeChoice); s.save(); DispatchQueue.main.async { ICQ.relayout() } }
         else if UI.scale != scaleChoice { UI.scale = scaleChoice; s.save(); DispatchQueue.main.async { ICQ.relayout() } }
         let nm = appNameDraft.trimmingCharacters(in: .whitespaces); if nm != s.appName { s.appName = nm.isEmpty ? "ICQuel" : nm; s.save(); AppDelegate.rebuildMenu() }

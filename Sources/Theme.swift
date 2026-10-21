@@ -142,7 +142,7 @@ struct ModernMain: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     group("Online", on.count, $openOn); if openOn { ForEach(on) { row($0, offline: false) } }
-                    if o.mIMessage { group("iMessage", live.count, $openIM).padding(.top, 4); if openIM { ForEach(live) { row($0, offline: false) } } }
+                    if o.mIMessage { group("iMessage", live.count, $openIM).padding(.top, 4); if openIM { ForEach(live) { row($0, offline: false) }; if s.bridgeEnabled { Button("Import from Messages…") { ICQ.openMessagesImport() }.buttonStyle(.link).padding(.leading, 22).padding(.vertical, 3) } } }
                     if o.mOffline { group("Offline", off.count, $openOff).padding(.top, 4); if openOff { ForEach(off) { row($0, offline: true) } } }
                 }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
             }.background(Color(nsColor: .textBackgroundColor)).overlay(Rectangle().stroke(Color(white: 0.7)))
@@ -170,7 +170,7 @@ struct ModernMain: View {
         }.padding(.leading, 22).padding(.vertical, 3).background(sel ? Color.accentColor.opacity(0.35) : Color.clear).contentShape(Rectangle())
             .onTapGesture(count: 2) { ICQ.openSession(c.uin) }
             .onTapGesture { s.selected = c.uin }
-            .overlay(RightClick { s.selected = c.uin; popMenu([MItem("Send Message") { ICQ.openSession(c.uin) }, MItem("History") { ICQ.openArchive(c.uin) }] + (c.isBot ? [MItem("AI Assistant Mode", checked: c.isAssistant) { s.toggleAssistant(c.uin) }] : []) + [.separator(), MItem("Delete") { ICQ.confirmDelete(c.uin) }]) })
+            .overlay(RightClick { s.selected = c.uin; popMenu([MItem("Send Message") { ICQ.openSession(c.uin) }, MItem("History") { ICQ.openArchive(c.uin) }] + ICQ.contactItems(c) + (c.isBot ? [MItem("AI Assistant Mode", checked: c.isAssistant) { s.toggleAssistant(c.uin) }] : []) + [.separator(), MItem("Delete") { ICQ.confirmDelete(c.uin) }]) })
     }
     func bigButton(_ sym: String, _ title: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {

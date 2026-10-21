@@ -203,7 +203,9 @@ final class MenuWindow: NSWindow {
 enum RMenu {
     static var wins: [MenuWindow] = []
     static var monitors: [Any] = []
-    static let font = NSFont(name: "Helvetica", size: 11) ?? .systemFont(ofSize: 11)
+    static var font: NSFont {
+        switch Theme.skin { case .platinum: return NSFont(name: "Geneva", size: 11) ?? .systemFont(ofSize: 11); case .aqua: return NSFont(name: "LucidaGrande", size: 11) ?? .systemFont(ofSize: 11); default: return NSFont(name: "Helvetica", size: 11) ?? .systemFont(ofSize: 11) }
+    }
     static func width(_ items: [RMItem]) -> CGFloat {
         let t = items.filter { !$0.sep }.map { ($0.title as NSString).size(withAttributes: [.font: font]).width + ($0.header ? 0 : 0) }.max() ?? 40
         return ceil(t) + 26 + 20 + 6 + (items.contains { $0.header } ? 10 : 0)

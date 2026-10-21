@@ -139,8 +139,8 @@ struct SendView: View {
                 etched("To:", R(0, 0, W, 44))
                 lbl("ICQ#:", R(8, 20, 34, 14), bold: true); val(c.uin, R(42, 17, 66, 18))
                 lbl("Nick:", R(114, 20, 28, 14), bold: true); val(c.name, R(144, 17, 62, 18))
-                lbl("EMail:", R(212, 20, 36, 14), bold: true); val("", R(248, 17, max(30, W - 248 - 30), 18))
-                IconBtn(name: "m_email", w: 20, h: 22) { comingSoon() }.offset(x: W - 24, y: 15)
+                lbl("EMail:", R(212, 20, 36, 14), bold: true); val(c.mailAddr ?? "", R(248, 17, max(30, W - 248 - 30), 18))
+                IconBtn(name: "m_email", w: 20, h: 22) { ICQ.mail(c) }.offset(x: W - 24, y: 15)
                 lbl("Enter Message:", R(4, 52, 90, 14)); lbl("Chars:", R(100, 52, 34, 14)); val(String(text.count), R(134, 49, 30, 18))
                 IconBtn(name: "tool_0") {}.offset(x: 170, y: 48)
                 IconBtn(name: "tool_3") {}.offset(x: 196, y: 48)
@@ -165,18 +165,21 @@ struct SendView: View {
 struct IncomingView: View {
     let uin: String; @ObservedObject var s = Store.shared
     @State private var textH: CGFloat = 0
+    /// Messages being read in this window: they count as read as soon as the window takes them over (the envelope stops flashing).
+    @State private var queue: [Msg]
+    init(uin: String) { self.uin = uin; _queue = State(initialValue: Store.shared.unread[uin] ?? []) }
     static let size = CGSize(width: 334, height: 220)
     static func title(_ n: Int) -> String { "Incoming Message [" + (n <= 1 ? "No More Events" : "\(n - 1) More Event" + (n == 2 ? "" : "s")) + "]" }
     var body: some View {
-        let c = s.contact(uin) ?? Contact(name: "?", uin: uin), q = s.unread[uin] ?? [], id = "in" + uin
-        let m = q.first, pop = { if !(s.unread[uin] ?? []).isEmpty { s.unread[uin]!.removeFirst() } }
+        let c = s.contact(uin) ?? Contact(name: "?", uin: uin), q = queue, id = "in" + uin
+        let m = q.first, pop = { if !queue.isEmpty { queue.removeFirst() } }
         GeometryReader { g in
             let W = floor(g.size.width), H = floor(g.size.height), mh = max(40, H - 92 - 70)
             ZStack(alignment: .topLeading) {
                 etched("From:", R(0, 0, W, 66))
                 lbl("Nick Name:", R(6, 17, 60, 14), bold: true); val(c.name, R(68, 14, 84, 18))
-                lbl("EMail:", R(158, 17, 36, 14), bold: true); val("", R(196, 14, max(30, W - 196 - 28), 18))
-                IconBtn(name: "m_email", w: 20, h: 22) { comingSoon() }.offset(x: W - 24, y: 12)
+                lbl("EMail:", R(158, 17, 36, 14), bold: true); val(c.mailAddr ?? "", R(196, 14, max(30, W - 196 - 28), 18))
+                IconBtn(name: "m_email", w: 20, h: 22) { ICQ.mail(c) }.offset(x: W - 24, y: 12)
                 lbl("ICQ#:", R(6, 42, 34, 14), bold: true); Pix(name: "contact", w: 16).offset(x: 42, y: 40); val(c.uin, R(62, 38, 62, 18))
                 lbl("Date:", R(130, 42, 30, 14), bold: true); val(m.map { msgDate($0.t) } ?? "", R(162, 38, 56, 18))
                 lbl("Time:", R(224, 42, 30, 14), bold: true); val(m.map { msgTime($0.t) } ?? "", R(256, 38, 50, 18))
@@ -201,6 +204,10 @@ struct IncomingView: View {
                 PushBtn(label: "Read Next") { pop(); WinMgr.shared.setTitle(id, IncomingView.title(max(0, q.count - 1))) }.disabled(q.count < 2).at(R(W - 78, H - 24, 76, 22))
             }.frame(width: W, height: H, alignment: .topLeading)
         }
-        .onChange(of: q.count) { n in if n == 0 { WinMgr.shared.close(id) } else { WinMgr.shared.setTitle(id, IncomingView.title(n)) } }
+        .onAppear { if s.unread[uin] != nil { s.unread[uin] = nil; ICQ.refreshTray() } }
+        .onChange(of: s.unread[uin]?.count ?? 0) { n in      // more messages arrived while the window is open
+            guard n > 0, let more = s.unread[uin] else { return }
+            queue += more; s.unread[uin] = nil; ICQ.refreshTray(); WinMgr.shared.setTitle(id, IncomingView.title(queue.count))
+        }
     }
 }

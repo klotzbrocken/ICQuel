@@ -6,7 +6,7 @@ APP=ICQuel.app
 rm -rf $APP ICQ99b.app; mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 source ./update.conf; source ./VERSION
 for ARCH in arm64 x86_64; do   # universal binary
-    swiftc -O -swift-version 5 -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit \
+    swiftc -O -swift-version 5 -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts \
         -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
 lipo -create /tmp/icquel-arm64 /tmp/icquel-x86_64 -output $APP/Contents/MacOS/ICQuel
@@ -44,6 +44,7 @@ cat > $APP/Contents/Info.plist <<'E'
 <key>SUScheduledCheckInterval</key><integer>86400</integer>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSContactsUsageDescription</key><string>Used only by the optional Messages bridge to show the names of your iMessage contacts.</string>
 <key>NSAppleEventsUsageDescription</key><string>Used only by the optional Messages bridge to send messages through the Messages app.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>

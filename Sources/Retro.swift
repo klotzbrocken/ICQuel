@@ -14,7 +14,8 @@ extension Color {
 }
 func rf(_ s: CGFloat = 10.5, bold: Bool = false) -> Font {
     if Theme.isModern { return .system(size: s + 2, weight: bold ? .semibold : .regular) }
-    if Theme.skin == .aqua { return .custom(bold ? "LucidaGrande-Bold" : "LucidaGrande", size: s * 0.97) }
+    if Theme.skin == .aqua { return .custom(bold ? "LucidaGrande-Bold" : "LucidaGrande", size: s * 0.9) }
+    if Theme.skin == .platinum { return bold ? Font.custom("Geneva", size: s * 0.9).bold() : .custom("Geneva", size: s * 0.9) }   // Mac OS 8/9 system font family
     return .custom(bold ? "Helvetica-Bold" : "Helvetica", size: s)
 }
 

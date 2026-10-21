@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Sparkle
+import Contacts
 
 enum ICQ {
     static let s = Store.shared
@@ -15,9 +16,13 @@ enum ICQ {
         if Theme.isModern { WinMgr.shared.open("connect", App.name, 300, 90) { ModernConnecting() } } else { WinMgr.shared.open("connect", App.name, 340, 80) { ConnectingView() } }
     }
     static func begin() {
-        if s.contacts.isEmpty { s.contacts = seedContacts.map { Contact(name: $0, uin: Store.newUin()) }; s.save() }
+        // the sample contacts (the dummy "friends") are added once, also when the setup assistant already created iMessage contacts or bots
+        if !UserDefaults.standard.bool(forKey: "seeded") {
+            UserDefaults.standard.set(true, forKey: "seeded")
+            if !s.contacts.contains(where: { !$0.isLive && !$0.isBot }) { s.contacts += seedContacts.map { Contact(name: $0, uin: Store.newUin()) }; s.save() }
+        }
         s.simulatePresence(); if s.status == .offline { s.status = .online }
-        openMain(); Sound.play("startup"); s.resetSched(); s.startBots(); s.startBridge(); if s.freqEnabled && s.demoFirst { s.startDemoFirst() }
+        openMain(); Sound.play("startup"); s.resetSched(); s.startBots(); s.startBridge(); s.startIdleWatch(); offerMessagesImport(); if s.freqEnabled && s.demoFirst { s.startDemoFirst() }
         refreshTray()
     }
     static func openMain() {
@@ -37,6 +42,35 @@ enum ICQ {
         guard let c = s.contact(u), !(s.unread[u] ?? []).isEmpty else { return }
         WinMgr.shared.open("in" + u, IncomingView.title((s.unread[u] ?? []).count), IncomingView.size.width, IncomingView.size.height, resizable: true) { IncomingView(uin: u) }
     }
+    // MARK: contact details: e-mail (opens the default mail app) and FaceTime
+    static func mail(_ c: Contact) {
+        if let a = c.mailAddr, let u = URL(string: "mailto:" + a.trimmingCharacters(in: .whitespaces)) { NSWorkspace.shared.open(u) }
+        else { notice("There is no e-mail address for \(c.name) yet.\nRight-click the contact > Edit Contact…") }
+    }
+    static func faceTime(_ c: Contact, audio: Bool) {
+        guard let t = c.callTarget?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { notice("There is no phone number for \(c.name) yet.\nRight-click the contact > Edit Contact…"); return }
+        let clean = t.contains("@") ? t : String(t.filter { $0.isNumber || $0 == "+" })   // spaces and dashes out
+        if let enc = clean.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed), let u = URL(string: (audio ? "facetime-audio://" : "facetime://") + enc) { NSWorkspace.shared.open(u) }
+    }
+    /// Once, when the bridge works but no conversation has been picked yet: offer the import list.
+    static func offerMessagesImport() {
+        guard s.bridgeEnabled, !Persist.testMode, !UserDefaults.standard.bool(forKey: "imsg_import_offered"), Bridge.checkAccess() == .ok else { return }
+        UserDefaults.standard.set(true, forKey: "imsg_import_offered")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { openMessagesImport() }
+    }
+    static func openMessagesImport() {
+        WinMgr.shared.close("msgimport")
+        WinMgr.shared.open("msgimport", "Import from Messages", MessagesImportView.size.width, MessagesImportView.size.height) { MessagesImportView() }
+    }
+    static func openContactEdit(_ uin: String) {
+        WinMgr.shared.close("edit" + uin)
+        WinMgr.shared.open("edit" + uin, "Edit Contact", ContactEditView.size.width, ContactEditView.size.height) { ContactEditView(uin: uin) }
+    }
+    /// Entries appended to the right-click menus of the contact lists.
+    static func contactItems(_ c: Contact) -> [NSMenuItem] {
+        [MItem("Edit Contact…") { openContactEdit(c.uin) }, MItem("Send Mail…", enabled: c.mailAddr != nil) { mail(c) },
+         MItem("FaceTime Video", enabled: c.callTarget != nil) { faceTime(c, audio: false) }, MItem("FaceTime Audio", enabled: c.callTarget != nil) { faceTime(c, audio: true) }]
+    }
     static func openArchive(_ u: String? = nil) { WinMgr.shared.open("archive", "Message Archive", 480, 360, resizable: Theme.isModern) { ArchiveView(cur: u ?? s.selected) } }
     static func openBot(_ u: String?) { let id = "bot" + (u ?? "new"); WinMgr.shared.open(id, u == nil ? "New AI Chatbot" : "Edit AI Chatbot", BotView.size.width, BotView.size.height) { BotView(uin: u) } }
     static func applyMainOptions() { WinMgr.shared.setLevel("main", (Theme.isModern ? s.opts.mOnTop : s.opts.alwaysOnTop) ? .floating : .normal) }
@@ -52,7 +86,7 @@ enum ICQ {
     static func confirmDelete(_ u: String) {
         if Theme.isModern { confirm("Delete \(s.contact(u)?.name ?? "?")?", "The contact will be removed from your list.", ok: "Delete", cancel: "Cancel") { s.remove(u) }; return }
         WinMgr.shared.open("del" + u, "Confirm Delete User", DeleteView.size.width, DeleteView.size.height) { DeleteView(uin: u) } }
-    static func openPrefs(_ tab: Int = 1) { WinMgr.shared.close("prefs"); if Theme.isModern { WinMgr.shared.open("prefs", "Preferences", 760, 540) { PrefsView(tab: tab) }; return }; WinMgr.shared.open("prefs", "\(App.name) Preferences – " + s.nick, 600, PrefsView.heights[tab] ?? 520, icon: "prefsicon") { PrefsView(tab: tab) } }
+    static func openPrefs(_ tab: Int = 1) { WinMgr.shared.close("prefs"); if Theme.isModern { WinMgr.shared.open("prefs", "Preferences", 760, 540) { PrefsView(tab: tab) }; return }; WinMgr.shared.open("prefs", "\(App.name) Preferences – " + s.nick, 600, PrefsView.height(tab), icon: "prefsicon") { PrefsView(tab: tab) } }
     static func setStatus(_ st: Status) {
         s.status = st; s.save(); refreshTray()
         if Theme.isModern, [.away, .na, .occupied, .dnd, .ffc].contains(st) {
@@ -142,7 +176,7 @@ enum ICQ {
     }
     static func shutDown() {
         confirm("Confirm ShutDown...", "Are you sure you want to shut down \(App.name)?") {
-            WinMgr.shared.closeAll(); s.stopSched(); s.stopBots(); s.stopBridge(); NSApp.dockTile.badgeLabel = nil; tray?.isVisible = false; NSApp.terminate(nil)
+            WinMgr.shared.closeAll(); s.stopSched(); s.stopBots(); s.stopBridge(); s.stopIdleWatch(); NSApp.dockTile.badgeLabel = nil; tray?.isVisible = false; NSApp.terminate(nil)
         }
     }
     static func trayClicked() {
@@ -184,11 +218,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let pk = ProcessInfo.processInfo.environment["ICQ_PACK"] {
                 do { let t = try Assets.importPack(from: URL(fileURLWithPath: pk)); Assets.select("pack:" + t.id); print("imported", t.name) } catch { print("import failed:", error.localizedDescription) }
             }
-            let steps: [(String, () -> Void)] = [("main", { Store.shared.uin = "10001"; Store.shared.nick = "Maik"; if Store.shared.contacts.isEmpty { Store.shared.contacts = seedContacts.prefix(6).map { Contact(name: $0, uin: Store.newUin()) }; Store.shared.simulatePresence(); _ = Store.shared.addBridgeContact("Anna (iMessage)", handle: "+491511234567") }; ICQ.openMain() }), ("setup", { ICQ.start(force: true) }), ("conn", { ICQ.connecting() }), ("send", { if let c = Store.shared.contacts.first { ICQ.openSend(c.uin) } }), ("about", { ICQ.openAbout() }), ("add", { ICQ.openAdd() }), ("p0", { ICQ.openPrefs(0) }), ("p1", { ICQ.openPrefs(1) }), ("p2", { ICQ.openPrefs(2) }), ("p3", { ICQ.openPrefs(3) }), ("p4", { ICQ.openPrefs(4) }), ("p6", { ICQ.openPrefs(6) }), ("p7", { ICQ.openPrefs(7) }), ("p8", { ICQ.openPrefs(8) }), ("away", { ICQ.confirmDelete("x") })]
-            for (i, st) in steps.enumerated() {
+            let steps: [(String, () -> Void)] = [("main", { Store.shared.uin = "10001"; Store.shared.nick = "Maik"; if Store.shared.contacts.isEmpty { Store.shared.contacts = seedContacts.prefix(6).map { Contact(name: $0, uin: Store.newUin()) }; Store.shared.simulatePresence(); _ = Store.shared.addBridgeContact("Anna (iMessage)", handle: "+491511234567") }; ICQ.openMain() }), ("setup", { ICQ.start(force: true) }), ("conn", { ICQ.connecting() }), ("edit", { if let c = Store.shared.contacts.first { ICQ.openContactEdit(c.uin) } }),
+                                       ("selftest", {   // prints counts only, never message text
+                let st = Store.shared; let n0 = st.unreadCount; st.status = .dnd; st.deliver(); print("DND: scheduled messages delivered:", st.unreadCount - n0)
+                st.status = .away; st.deliver(); print("Away: scheduled messages delivered:", st.unreadCount - n0)
+                st.status = .online; st.deliver(); print("Online: scheduled messages delivered:", st.unreadCount - n0)
+                if let top = Bridge.maxRowID(), let h = Bridge.incoming(after: max(0, top - 800)).first?.handle { let r = Bridge.recent(handle: h, limit: 5); let cv = Bridge.conversations(limit: 15); print("Contacts authorization (0=undetermined,1=restricted,2=denied,3=authorized):", CNContactStore.authorizationStatus(for: .contacts).rawValue); let hs = Bridge.conversations(limit: 15).map(\.handle); Bridge.names(for: hs) { n in print("Names resolved:", n.count, "of", hs.count) }; print("Messages conversations: \(cv.count) found, \(cv.filter { $0.count > 1 }.count) with several messages"); print("Messages unread among latest 5 of one chat:", Bridge.unreadAmongLatest(handle: h, n: 5)); print("Messages recent: \(r.count) found, \(r.filter(\.fromMe).count) sent by me") } else { print("Messages recent: no access / no data") } }),
+                                       ("incoming", { if let c = Store.shared.contacts.first { Store.shared.deliver(to: c, text: "Hey, bist du noch da"); Store.shared.deliver(to: c, text: "second"); print("unread before opening:", Store.shared.unreadCount); ICQ.openIncoming(c.uin); DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { print("unread after opening:", Store.shared.unreadCount) } } }), ("send", { if let c = Store.shared.contacts.first { ICQ.openSend(c.uin) } }), ("about", { ICQ.openAbout() }), ("add", { ICQ.openAdd() }), ("p0", { ICQ.openPrefs(0) }), ("p1", { ICQ.openPrefs(1) }), ("p2", { ICQ.openPrefs(2) }), ("p3", { ICQ.openPrefs(3) }), ("p4", { ICQ.openPrefs(4) }), ("p6", { ICQ.openPrefs(6) }), ("p7", { ICQ.openPrefs(7) }), ("p8", { ICQ.openPrefs(8) }), ("away", { ICQ.confirmDelete("x") })]
+            let only = ProcessInfo.processInfo.environment["ICQ_ONLY"]?.split(separator: ",").map(String.init)
+            for (i, st) in steps.filter({ only == nil || only!.contains($0.0) }).enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + Double(i) * 1.2) { WinMgr.shared.closeAll(); st.1(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { WinMgr.shared.snapshot(to: dir, prefix: st.0 + "-") } }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + Double(steps.count) * 1.2 + 1) { NSApp.terminate(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + Double(steps.filter({ only == nil || only!.contains($0.0) }).count) * 1.2 + 1) { NSApp.terminate(nil) }
         }
         NSApp.activate(ignoringOtherApps: true)
     }

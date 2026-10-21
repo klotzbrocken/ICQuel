@@ -16,6 +16,7 @@ struct SetupView: View {
     @State private var botName = ""
     @State private var preset = "friend"
     @State private var persona = ""
+    @StateObject private var conv = ConvModel()
     private let s = Store.shared
     private var steps: Int { 3 }
 
@@ -52,8 +53,10 @@ struct SetupView: View {
                 RButton(title: "Allow Messages control", minWidth: 150) { Bridge.requestAutomation { bridgeMsg = $0 } }
                 if !bridgeMsg.isEmpty { Text(bridgeMsg).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
             }
-            RGroup(title: "First iMessage contact (optional)") {
-                HStack { RField(placeholder: "Name", text: $bridgeName).frame(width: 120); RField(placeholder: "Phone number or e-mail", text: $bridgeHandle) }
+            RGroup(title: "Your recent iMessage conversations") {
+                Text("After the permissions above: load your latest chats and tick the people you want as contacts. Names come from your Contacts (macOS asks once). The last 5 messages of each are loaded.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
+                RButton(title: "Load my conversations", minWidth: 170) { conv.load() }
+                ConvList(m: conv).frame(height: 150)
             }
             Text("More contacts can be added in Preferences > Bridge.").foregroundColor(.hint)
         }
@@ -79,7 +82,7 @@ struct SetupView: View {
         let digits = uin.filter(\.isNumber); s.uin = digits.isEmpty ? Store.newUin() : digits
         let n = nick.trimmingCharacters(in: .whitespaces); s.nick = n.isEmpty ? App.name + s.uin : n
         s.bridgeEnabled = bridge
-        if bridge, !bridgeHandle.trimmingCharacters(in: .whitespaces).isEmpty { _ = s.addBridgeContact(bridgeName, handle: bridgeHandle) }
+        if bridge { conv.importPicked() }
         if ai {
             let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
             if !k.isEmpty { s.apiKey = k; s.keyLoaded = true; s.aiEnabled = true }
