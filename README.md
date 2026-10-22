@@ -3,9 +3,11 @@
 A retro-styled instant-messenger companion for macOS: a native Swift/SwiftUI app that looks and feels like a late-90s messenger.
 It is a local click-dummy by default (sample messages, no network). Optionally it can connect AI chatbots and your iMessage conversations.
 
-| Retro | Aqua | Classic Mac | Modern |
+| Windows classic | Aqua | macOS classic | Modern |
 |---|---|---|---|
-| ![](screenshots/retro-contacts.png) | ![](screenshots/aqua-contacts.png) | ![](screenshots/classic-mac-contacts.png) | ![](screenshots/modern-light-contacts.png) |
+| ![](screenshots/windows-classic-main.png) | ![](screenshots/aqua-main.png) | ![](screenshots/macos-classic-main.png) | ![](screenshots/modern-main.png) |
+
+**Download:** [latest release](https://github.com/klotzbrocken/ICQuel/releases/latest) (DMG, signed and notarized; updates inside the app via Sparkle).
 
 ## Features
 - Five built-in themes: Retro (Windows 98 style), Aqua, Classic Mac (Mac OS 8/9 style), Modern Mac (light/dark); resizable windows, any ID/nickname (visual only).
