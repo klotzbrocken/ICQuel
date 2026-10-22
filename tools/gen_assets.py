@@ -42,7 +42,7 @@ class Canvas:
 def save(name, im): im.save(os.path.join(IMG, name + '.png'))
 
 def drop_pts(cx, cy, R, steps=64):
-    """Teardrop: round body with a tip on top."""
+    """Teardrop: round body with a tip on top (used by the three-drop "All" tab icon)."""
     r = R * 0.72; ccy = cy + R * 0.22; tip = (cx, cy - R); d = ccy - tip[1]
     phi = math.acos(r / d)
     pts = [tip, (cx + r * math.sin(phi), ccy - r * math.cos(phi))]
@@ -53,70 +53,8 @@ def drop_pts(cx, cy, R, steps=64):
 
 def droplet(c, cx, cy, R, fill, outline=None, shine=True):
     c.poly(drop_pts(cx, cy, R), fill=fill, outline=outline)
-    if shine:
-        c.ellipse((cx - R * 0.42, cy + R * 0.02, cx - R * 0.14, cy + R * 0.42), fill=(255, 255, 255, 120))
 
-def mascot(c, cx, cy, R, body=TEAL, face=True):
-    droplet(c, cx, cy, R, body, outline=NAVY, shine=False)
-    c.poly(drop_pts(cx, cy, R), outline=NAVY)
-    ccy = cy + R * 0.22
-    c.ellipse((cx - R * 0.42, ccy - R * 0.10, cx - R * 0.18, ccy + R * 0.16), fill=WHITE)
-    c.ellipse((cx + R * 0.18, ccy - R * 0.10, cx + R * 0.42, ccy + R * 0.16), fill=WHITE)
-    c.ellipse((cx - R * 0.34, ccy - R * 0.02, cx - R * 0.24, ccy + R * 0.10), fill=NAVY)
-    c.ellipse((cx + R * 0.24, ccy - R * 0.02, cx + R * 0.34, ccy + R * 0.10), fill=NAVY)
-    c.d.arc([c.s(cx - R * 0.28), c.s(ccy + R * 0.05), c.s(cx + R * 0.28), c.s(ccy + R * 0.42)], 20, 160, fill=NAVY, width=int(max(1, R * 0.07) * SS))
-
-# ---------------------------------------------------------------- app icon / logo
-def icon(size=1024):
-    S = size
-    c = Canvas(S // SS * 1, S // SS * 1) if False else None
-    im = Image.new('RGBA', (S, S), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
-    pad = int(S * 0.06); box = (pad, pad, S - pad, S - pad)
-    grad = Image.new('RGBA', (S, S))
-    gp = grad.load()
-    for y in range(S):
-        t = y / (S - 1)
-        col = tuple(int(NAVY[i] * (1 - t) + TEAL[i] * t) for i in range(3)) + (255,)
-        for x in range(S): gp[x, y] = col
-    mask = Image.new('L', (S, S), 0); ImageDraw.Draw(mask).rounded_rectangle(box, radius=int(S * 0.22), fill=255)
-    im.paste(grad, (0, 0), mask)
-    big = Canvas(S // 2, S // 2)  # drawn at (S/2)*8 = 4S px, then reduced to S
-    cx, cy, R = S / 4, S / 4 + S * 0.012, S * 0.17
-    droplet(big, cx, cy, R, WHITE, shine=False)
-    r = R * 0.72; ccy = cy + R * 0.22
-    big.ellipse((cx - r * 0.78, ccy - r * 0.62, cx + r * 0.78, ccy + r * 0.62), fill=CYAN)
-    big.poly([(cx - r * 0.2, ccy + r * 0.55), (cx - r * 0.5, ccy + r * 0.98), (cx + r * 0.12, ccy + r * 0.58)], fill=CYAN)
-    for k, dx in enumerate((-0.38, 0, 0.38)):
-        big.ellipse((cx + r * dx - r * 0.1, ccy - r * 0.1, cx + r * dx + r * 0.1, ccy + r * 0.1), fill=WHITE)
-    # small sparkle
-    sx, sy, sr = cx + R * 1.02, cy - R * 0.72, R * 0.2
-    big.poly([(sx, sy - sr), (sx + sr * 0.28, sy - sr * 0.28), (sx + sr, sy), (sx + sr * 0.28, sy + sr * 0.28), (sx, sy + sr), (sx - sr * 0.28, sy + sr * 0.28), (sx - sr, sy), (sx - sr * 0.28, sy - sr * 0.28)], fill=YELLOW)
-    art = big.out().resize((S, S), Image.LANCZOS)
-    im.alpha_composite(art)
-    return im
-
-def logo_mascot(size):
-    c = Canvas(size, size); mascot(c, size / 2, size / 2 + size * 0.02, size * 0.42)
-    return c.out()
-
-# ---------------------------------------------------------------- 16px status bubbles & small glyph icons
-def bubble(fill, glyph=None, ring=False):
-    c = Canvas(16, 16)
-    if ring:
-        c.ellipse((2, 2, 14, 14), outline=fill, width=1.6)
-    else:
-        c.ellipse((1.5, 1.5, 14.5, 14.5), fill=fill, outline=tuple(int(v * 0.65) for v in fill), width=1)
-        c.ellipse((4, 3, 8, 7), fill=(255, 255, 255, 90))
-    if glyph == 'clock': c.line([(8, 4.5), (8, 8), (10.5, 9.5)], WHITE, 1.5)
-    if glyph == 'bar': c.rect((4.5, 7, 11.5, 9), fill=WHITE)
-    if glyph == 'excl': c.rect((7.2, 4, 8.8, 9), fill=WHITE); c.ellipse((7, 10.2, 9, 12.2), fill=WHITE)
-    if glyph == 'dots':
-        for x in (4.8, 8, 11.2): c.ellipse((x - 0.9, 7.1, x + 0.9, 8.9), fill=WHITE)
-    if glyph == 'smile':
-        c.ellipse((5, 5.2, 6.6, 6.8), fill=WHITE); c.ellipse((9.4, 5.2, 11, 6.8), fill=WHITE)
-        c.d.arc([c.s(5), c.s(6.2), c.s(11), c.s(12)], 20, 160, fill=WHITE, width=int(1.2 * SS))
-    return c.out()
-
+# ---------------------------------------------------------------- small glyph icons
 def person(color=NAVY, bg=None):
     c = Canvas(16, 16)
     if bg: c.rect((0.5, 0.5, 15.5, 15.5), fill=bg, outline=(0, 0, 0, 40), r=3)
@@ -193,11 +131,6 @@ def labelled(w, h, text, icon_draw=None, bg=None, fg=NAVY, size=None, pad_left=0
     return c.out()
 
 def build_images():
-    for name, (fill, glyph, ring) in {
-        'online': (GREEN, None, False), 'away': (AMBER, 'clock', False), 'na': (ORANGE, 'dots', False), 'occupied': (RED, 'excl', False),
-        'dnd': (RED, 'bar', False), 'ffc': ((44, 198, 217), 'smile', False), 'invisible': (GRAY, None, True), 'offline': (LGRAY, None, True)}.items():
-        save(name, bubble(fill, glyph, ring))
-    save('tab_online', bubble(GREEN))
     save('contact', person(NAVY, (232, 240, 247))); save('usertab', person(NAVY)); save('alltab', tabs_all())
     save('msg', envelope()); save('note', note_icon())
     for n, k in (('m_page', 'page'), ('m_reminder', 'reminder'), ('m_notes', 'notes'), ('m_todo', 'todo'), ('m_email', 'email'), ('m_phone', 'phone'), ('m_archive', 'archive'),
@@ -232,23 +165,9 @@ def build_images():
     def target(c): c.ellipse((3, 3.5, 14, 14.5), outline=RED, width=1.4); c.ellipse((6.4, 6.9, 10.6, 11.1), fill=RED)
     save('icqnow', labelled(69, 19, 'Now!', target, size=12, pad_left=15))
     c = Canvas(44, 16, YELLOW + (255,)); c.rect((0.5, 0.5, 43.5, 15.5), outline=NAVY, width=1); c.text((22, 8.6), 'Services', 9.5, NAVY, anchor='mm'); save('services', c.out())
-    c = Canvas(57, 19); droplet(c, 9, 9.4, 7.5, TEAL, outline=NAVY, shine=False); c.text((17.5, 9.8), 'ICQuel', 11, NAVY, anchor='lm'); save('icqlogo', c.out())
-    # vertical banner 22x192
-    ban = Canvas(22, 192, NAVY + (255,))
-    txt = Image.new('RGBA', (192 * SS, 22 * SS), (0, 0, 0, 0)); ImageDraw.Draw(txt).text((8 * SS, 11 * SS), 'ICQuel  -  spring of chats', font=font(12 * SS), fill=CYAN, anchor='lm')
-    ban.im.alpha_composite(txt.rotate(90, expand=True), (0, 0)); droplet(ban, 11, 12, 7, TEAL, outline=WHITE, shine=False)
-    save('banner', ban.out())
-    # larger art
-    c = Canvas(120, 120, (240, 250, 252, 255)); mascot(c, 60, 56, 40, TEAL); c.text((60, 108), App_NAME, 11, NAVY, anchor='mm'); save('splash', c.out())
-    wiz = Canvas(100, 240, (232, 246, 250, 255))
-    for i in range(24): wiz.rect((0, i * 10, 100, i * 10 + 10), fill=tuple(int(a * (1 - i / 24) + b * (i / 24)) for a, b in zip((232, 246, 250), (150, 215, 225))) + (255,))
-    mascot(wiz, 50, 100, 34, TEAL); wiz.text((50, 150), App_NAME, 13, NAVY, anchor='mm'); save('wizard', wiz.out())
-    save('flower32', logo_mascot(32)); save('logo', logo_mascot(128)); save('prefsicon', logo_mascot(16))
-    for n, col in (('ico_1001', TEAL), ('ico_1002', GREEN), ('ico_1006', TEAL), ('ico_1018', RED), ('ico_1019', (44, 120, 220)), ('ico_1020', AMBER), ('ico_2058', ORANGE)):
-        c = Canvas(32, 32); mascot(c, 16, 16.5, 13, col); save(n, c.out())
     def msgicon(sym, col):
         c = Canvas(32, 32); c.ellipse((2.5, 2.5, 29.5, 29.5), fill=col, outline=NAVY, width=1.2); c.text((16, 16.8), sym, 20, WHITE, anchor='mm'); return c.out()
-    save('info32', msgicon('i', (44, 120, 220))); save('question32', msgicon('?', TEAL)); save('face32', logo_mascot(32))
+    save('info32', msgicon('i', (44, 120, 220)))
 
 # ---------------------------------------------------------------- sounds
 RATE = 22050
@@ -288,9 +207,7 @@ def build_sounds():
     write('msgback', noise_click(0.05, 0.45, 900))
     write('alert', seq([(0, tone(988, 0.2, decay=9)), (0.2, tone(988, 0.2, decay=9)), (0.4, tone(740, 0.5, decay=6))]))
 
-App_NAME = 'ICQuel'
 if __name__ == '__main__':
-    icon(1024).save(os.path.join(ROOT, 'icon.png'))
     build_images(); build_sounds()
     print('own assets written to', os.path.normpath(ROOT), '-', len(os.listdir(IMG)), 'images,', len(os.listdir(SND)), 'sounds')
 

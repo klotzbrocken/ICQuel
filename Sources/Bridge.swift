@@ -55,10 +55,7 @@ enum Bridge {
         var out: [Incoming] = []
         while sqlite3_step(st) == SQLITE_ROW {
             let id = sqlite3_column_int64(st, 0)
-            var text = sqlite3_column_text(st, 1).map { String(cString: $0) } ?? ""
-            if text.isEmpty, let p = sqlite3_column_blob(st, 2) { text = decodeAttributedBody(Data(bytes: p, count: Int(sqlite3_column_bytes(st, 2)))) ?? "" }
-            text = text.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty { text = "[Attachment]" }
+            let text = messageText(st, 1, 2)
             let date = Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 3)) / 1_000_000_000)
             let handle = sqlite3_column_text(st, 4).map { String(cString: $0) } ?? ""
             out.append(Incoming(rowid: id, handle: handle, text: text, date: date))
@@ -67,6 +64,13 @@ enum Bridge {
     }
 
     /// Newer macOS versions keep the text only inside the `attributedBody` typedstream: "NSString" ... 0x2B <length> <utf8>.
+    /// Text of a message row: the `text` column, else the typedstream in `attributedBody`; "[Attachment]" when only an object is left.
+    private static func messageText(_ st: OpaquePointer?, _ textCol: Int32, _ bodyCol: Int32) -> String {
+        var text = sqlite3_column_text(st, textCol).map { String(cString: $0) } ?? ""
+        if text.isEmpty, let p = sqlite3_column_blob(st, bodyCol) { text = decodeAttributedBody(Data(bytes: p, count: Int(sqlite3_column_bytes(st, bodyCol)))) ?? "" }
+        text = text.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "[Attachment]" : text
+    }
     static func decodeAttributedBody(_ d: Data) -> String? {
         let bytes = [UInt8](d), key = Array("NSString".utf8)
         guard bytes.count > key.count + 6 else { return nil }
@@ -115,10 +119,8 @@ enum Bridge {
             guard let hid = sqlite3_column_text(st, 3).map({ String(cString: $0) }) else { continue }
             if let i = out.firstIndex(where: { same($0.handle, hid) || $0.handle == hid }) { out[i].count += 1; continue }
             guard out.count < limit else { continue }
-            var text = sqlite3_column_text(st, 0).map { String(cString: $0) } ?? ""
-            if text.isEmpty, let p = sqlite3_column_blob(st, 1) { text = decodeAttributedBody(Data(bytes: p, count: Int(sqlite3_column_bytes(st, 1)))) ?? "" }
-            text = text.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            out.append(Conversation(handle: hid, last: text.isEmpty ? "[Attachment]" : text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000), count: 1))
+            let text = messageText(st, 0, 1)
+            out.append(Conversation(handle: hid, last: text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000), count: 1))
         }
         return out
     }
@@ -156,10 +158,7 @@ enum Bridge {
         var out: [Recent] = []
         while sqlite3_step(st) == SQLITE_ROW, out.count < limit {
             guard let hid = sqlite3_column_text(st, 4).map({ String(cString: $0) }), same(hid, handle) else { continue }
-            var text = sqlite3_column_text(st, 0).map { String(cString: $0) } ?? ""
-            if text.isEmpty, let p = sqlite3_column_blob(st, 1) { text = decodeAttributedBody(Data(bytes: p, count: Int(sqlite3_column_bytes(st, 1)))) ?? "" }
-            text = text.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty { text = "[Attachment]" }
+            let text = messageText(st, 0, 1)
             out.append(Recent(fromMe: sqlite3_column_int(st, 3) != 0, text: text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000)))
         }
         return out.reversed()

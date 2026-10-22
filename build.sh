@@ -2,11 +2,11 @@
 # Builds ICQ99b.app (native macOS, no Xcode project needed). Usage: ./build.sh
 set -e
 cd "$(dirname "$0")"
-APP=ICQuel.app
-rm -rf $APP ICQ99b.app; mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
+APP=${APP_OUT:-ICQuel.app}   # APP_OUT: other output path (tools/screenshots.sh); DEBUG_BUILD=1: include the scripted test hooks
+rm -rf $APP; mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 source ./update.conf; source ./VERSION
 for ARCH in arm64 x86_64; do   # universal binary
-    swiftc -O -swift-version 5 -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts \
+    swiftc -O -swift-version 5 ${DEBUG_BUILD:+-DDEBUG} -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts \
         -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
 lipo -create /tmp/icquel-arm64 /tmp/icquel-x86_64 -output $APP/Contents/MacOS/ICQuel

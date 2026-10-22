@@ -13,13 +13,6 @@ enum Builtin {
     static func template(_ key: String) -> Tpl? {
         let app = App.name
         switch key {
-        case "1007": return T(170, 96, [
-            S("Please enter your ID and password.", 6, 6, 158, 10, id: 1232),
-            S("User:", 6, 24, 36, 10), S("", 52, 22, 110, 13, id: 1158),
-            S("Password:", 6, 43, 40, 10), E(1159, 52, 41, 110, 12, pass),
-            B("Save password", 1031, 52, 57, 70, 10, check),
-            S("", 6, 71, 156, 1, style: 0x50001007),
-            B("OK", 1, 62, 77, 46, 14, def), B("Cancel", 2, 114, 77, 46, 14)])
         case "1015": return T(240, 54, [
             S("", 36, 6, 196, 18, id: 1200), Ctl("Static", "", id: 65535, 8, 6, 20, 20, style: 0x50000003, ord: 1006),
             B("Yes", 1, 130, 34, 48, 14, def), B("No", 2, 184, 34, 48, 14)])

@@ -150,6 +150,7 @@ final class WinMgr: NSObject, NSWindowDelegate {
         win.setFrame(NSRect(x: left, y: top - nh, width: nw, height: nh), display: true)
         if let host = win.contentView as? NSView { host.needsLayout = true }
     }
+    #if DEBUG
     /// Debug aid (ICQ_SNAPSHOT=<dir>): writes every open window's contents to PNG, without touching the screen.
     func snapshot(to dir: String, prefix: String = "") {
         for (id, w) in wins {
@@ -162,20 +163,14 @@ final class WinMgr: NSObject, NSWindowDelegate {
             try? r.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(prefix)\(id).png"))
         }
     }
+    #endif
     func has(_ id: String) -> Bool { wins[id] != nil }
     func frame(_ id: String) -> NSRect? { wins[id]?.frame }
-    /// Debug: class of the view that would receive a click at (x, y) points from the window's top-left.
-    func hitClass(_ id: String, x: CGFloat, y: CGFloat) -> String? {
-        guard let w = wins[id], let v = w.contentView else { return nil }
-        let p = NSPoint(x: x * UI.scale, y: v.bounds.height - y * UI.scale)
-        return v.hitTest(v.convert(p, from: nil)).map { String(describing: type(of: $0)) }
-    }
     func close(_ id: String) { wins[id]?.close() }
     private var bulk = false
     func closeAll() { bulk = true; Array(wins.values).forEach { $0.close() }; bulk = false }
     func setTitle(_ id: String, _ t: String) { infos[id]?.title = brand(t); wins[id]?.title = brand(t) }
     func setLevel(_ id: String, _ level: NSWindow.Level) { wins[id]?.level = level }
-    func levelRaw(_ id: String) -> Int? { wins[id]?.level.rawValue }
     func minimize(_ id: String) { wins[id]?.miniaturize(nil) }
     func front(_ id: String) { wins[id]?.makeKeyAndOrderFront(nil) }
     func windowWillClose(_ n: Notification) {
@@ -353,7 +348,9 @@ func comingSoon() { notice("Coming soon.") }
 enum UI {
     static var scale: CGFloat {
         get {
-            if let e = ProcessInfo.processInfo.environment["ICQ_SCALE"], Persist.testMode, let d = Double(e) { return CGFloat(d) }   // self-test only
+            #if DEBUG
+            if let e = ProcessInfo.processInfo.environment["ICQ_SCALE"], let d = Double(e) { return CGFloat(d) }   // debug builds only
+            #endif
             let v = UserDefaults.standard.double(forKey: "ui_scale"); return v >= 1 ? CGFloat(v) : 1.05
         }
         set { UserDefaults.standard.set(Double(newValue), forKey: "ui_scale") }

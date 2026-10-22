@@ -5,40 +5,6 @@ private func at(_ c: Ctl) -> some ViewModifier { Place(c: c) }
 private struct Place: ViewModifier { let c: Ctl; func body(content: Content) -> some View { content.frame(width: c.w, height: c.h, alignment: .topLeading).offset(x: c.x, y: c.y) } }
 extension View { fileprivate func place(_ c: Ctl) -> some View { modifier(Place(c: c)) } }
 
-// MARK: login = original dialog 1007 "Connect to The ICQ Network" (+ nickname row; the original only asks for the user)
-struct LoginView: View {
-    @State private var uin = Store.shared.uin
-    @State private var nick = Store.shared.nick
-    @State private var pw = ""
-    @State private var save = true
-    var body: some View {
-        var t = Tpl.load("1007")
-        let shift = dy(18)
-        t.ctls = t.ctls.map { var c = $0; if c.y >= dy(40) { c.y += shift }; return c }
-        t.h += shift
-        t.ctls.append(Ctl("Static", "Nickname:", 5, 40, 40, 10)); t.ctls.append(Ctl("Edit", "", id: 9001, 50, 38, 105, 13, style: 0x50810080))
-        let go = {
-            let s = Store.shared
-            let digits = uin.filter(\.isNumber); s.uin = digits.isEmpty ? Store.newUin() : digits
-            let n = nick.trimmingCharacters(in: .whitespaces); s.nick = n.isEmpty ? App.name + s.uin : n
-            s.save(); WinMgr.shared.close("wizard"); ICQ.connecting()
-        }
-        return DlgView(tpl: t, hidden: [1349], texts: [1232: "Any ICQ# and nickname will do."], custom: { c in
-            if c.text == "User:" { return AnyView(DefCtl(c: Ctl("Static", "ICQ#:", 0, 0, 0, 0)).frame(width: c.w, height: c.h)) }
-            switch c.id {
-            case 1158: return AnyView(REdit(text: $uin))
-            case 9001: return AnyView(REdit(text: $nick))
-            case 1159: return AnyView(REdit(text: $pw, secure: true))
-            case 1031: return AnyView(DefCtl(c: c, on: save) { save.toggle() })
-            case 1: return AnyView(PushBtn(label: "OK", isDefault: true, action: go))
-            case 2: return AnyView(PushBtn(label: "Cancel", isCancel: true) { WinMgr.shared.close("wizard") })
-            default: return nil
-            }
-        }).onAppear { }
-    }
-    static var size: CGSize { let t = Tpl.load("1007"); return CGSize(width: t.w, height: t.h + dy(18)) }
-}
-
 // MARK: About ICQ = dialog 2001
 struct AboutView: View {
     var body: some View {

@@ -158,21 +158,6 @@ struct RGroup<Content: View>: View {
             .padding(.top, 7)
     }
 }
-struct RTabs: View {
-    let titles: [String]; @Binding var sel: Int
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(titles.indices, id: \.self) { i in
-                Text(titles[i]).font(rf()).foregroundColor(.black).padding(.horizontal, 8).padding(.top, i == sel ? 3 : 4).padding(.bottom, i == sel ? 4 : 2)
-                    .background(Color.gray98).overlay(Rectangle().stroke(Color.black, lineWidth: 1), alignment: .trailing)
-                    .overlay(Rectangle().fill(Color.white).frame(height: 1), alignment: .top)
-                    .offset(y: i == sel ? 1 : 2).zIndex(i == sel ? 1 : 0)
-                    .onTapGesture { sel = i }
-            }
-            Spacer()
-        }.padding(.leading, 2)
-    }
-}
 struct Page<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {

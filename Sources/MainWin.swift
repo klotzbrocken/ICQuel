@@ -3,10 +3,6 @@ import AppKit
 
 // The ICQ 99b contact list window, laid out from the reference screenshot (client area 164 x 330 px advanced, 164 x 261 px simple).
 private struct ScrollInfo: Equatable { var offset: CGFloat = 0; var content: CGFloat = 0 }
-private struct ScrollKey: PreferenceKey {
-    static var defaultValue = ScrollInfo()
-    static func reduce(value: inout ScrollInfo, nextValue: () -> ScrollInfo) { value = nextValue() }
-}
 private extension View {
     func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> some View { frame(width: w, height: h, alignment: .topLeading).offset(x: x, y: y) }
 }

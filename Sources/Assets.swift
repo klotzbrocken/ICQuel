@@ -31,7 +31,6 @@ enum Assets {
         set { if let v = newValue { UserDefaults.standard.set(v, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) } }
     }
     static var active: (pack: ThemePack, dir: URL)? { activeId.flatMap { id in installed().first { $0.pack.id == id } } }
-    static var hasPackTemplates: Bool { dialogs() != nil }
 
     // MARK: theme choices (built-in + installed)
     struct Choice: Identifiable { var id: String; var title: String }
@@ -57,7 +56,6 @@ enum Assets {
         var dirs: [String] = []
         if let a = active { dirs.append(a.dir.path + "/" + sub) }
         if let r = Bundle.main.resourcePath { dirs.append(r + "/" + sub) }
-        dirs.append(fm.currentDirectoryPath + "/assets-own/" + sub)
         return dirs.map { $0 + "/" + file }.first { fm.fileExists(atPath: $0) }
     }
     static func soundNames() -> [String] {
@@ -65,7 +63,6 @@ enum Assets {
         var dirs: [String] = []
         if let a = active { dirs.append(a.dir.path + "/sounds") }
         if let r = Bundle.main.resourcePath { dirs.append(r + "/sounds") }
-        dirs.append(fm.currentDirectoryPath + "/assets-own/sounds")
         var set = Set<String>()
         for d in dirs { for f in (try? fm.contentsOfDirectory(atPath: d)) ?? [] where f.lowercased().hasSuffix(".wav") { set.insert(String(f.dropLast(4)).lowercased()) } }
         return set.sorted()

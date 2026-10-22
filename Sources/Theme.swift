@@ -11,7 +11,9 @@ enum Theme: String, CaseIterable {
     private static var cache: Theme?
     static var current: Theme {
         get {
-            if let e = ProcessInfo.processInfo.environment["ICQ_THEME"], let t = Theme(rawValue: e) { return t }   // tests only
+            #if DEBUG
+            if let e = ProcessInfo.processInfo.environment["ICQ_THEME"], let t = Theme(rawValue: e) { return t }   // debug builds only
+            #endif
             if let c = cache { return c }
             let t = Theme(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? .classic; cache = t; return t
         }
@@ -55,32 +57,6 @@ private func flowerImage(_ online: Bool, _ size: CGFloat) -> some View {
 }
 private let hhmm: (Date) -> String = { d in let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: d) }
 
-// MARK: login (modern)
-struct ModernLogin: View {
-    @State private var uin = Store.shared.uin
-    @State private var nick = Store.shared.nick
-    @State private var pw = ""
-    static let size = CGSize(width: 340, height: 330)
-    var body: some View {
-        let go = {
-            let s = Store.shared
-            let digits = uin.filter(\.isNumber); s.uin = digits.isEmpty ? Store.newUin() : digits
-            let n = nick.trimmingCharacters(in: .whitespaces); s.nick = n.isEmpty ? App.name + s.uin : n
-            s.save(); WinMgr.shared.close("wizard"); ICQ.connecting()
-        }
-        VStack(spacing: 14) {
-            Image(nsImage: pic("logo")).resizable().interpolation(.high).frame(width: 72, height: 72)
-            Text("Connect to \(App.name)").font(.title2.weight(.semibold))
-            Form {
-                TextField("ID", text: $uin).onSubmit(go)
-                TextField("Nickname", text: $nick).onSubmit(go)
-                SecureField("Password", text: $pw).onSubmit(go)
-            }.formStyle(.columns).frame(width: 250)
-            Text("Any ID and nickname will do.").font(.caption).foregroundColor(.secondary)
-            HStack { Button("Cancel") { WinMgr.shared.close("wizard") }.keyboardShortcut(.cancelAction); Button("Connect", action: go).keyboardShortcut(.defaultAction) }
-        }.padding(20)
-    }
-}
 struct ModernConnecting: View {
     @State private var p = 0.0
     @State private var done = false

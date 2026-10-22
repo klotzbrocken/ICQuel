@@ -90,27 +90,21 @@ private struct Saved: Codable {
 /// not in UserDefaults: resetting preferences or rebuilding the app must never lose the user's chatbots.
 /// Test runs (ICQ_SNAPSHOT) use a throw-away folder and never touch real data.
 enum Persist {
+    #if DEBUG
     static var testMode: Bool { ProcessInfo.processInfo.environment["ICQ_SNAPSHOT"] != nil }
+    #else
+    static var testMode: Bool { false }
+    #endif
     static var dir: URL {
         let fm = FileManager.default
         if testMode { return fm.temporaryDirectory.appendingPathComponent("icq-test-\(ProcessInfo.processInfo.processIdentifier)") }
         return fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ICQuel")
     }
     /// Data written by the first versions (folder "ICQ99b") is copied over once.
-    static func migrateOldFolder() {
-        let fm = FileManager.default
-        guard !testMode, !fm.fileExists(atPath: file.path) else { return }
-        let old = dir.deletingLastPathComponent().appendingPathComponent("ICQ99b")
-        if fm.fileExists(atPath: old.appendingPathComponent("store.json").path) { try? fm.copyItem(at: old, to: dir) }
-    }
     static var file: URL { dir.appendingPathComponent("store.json") }
     private static var backedUp = false
     static func load() -> Data? {
-        migrateOldFolder()
-        if let d = try? Data(contentsOf: file) { return d }
-        guard !testMode, let legacy = UserDefaults.standard.data(forKey: "icq99b") else { return nil }
-        write(legacy)                                    // one-time migration from the old location
-        return legacy
+        try? Data(contentsOf: file)
     }
     static func write(_ d: Data) {
         let fm = FileManager.default
@@ -188,7 +182,7 @@ final class Store: ObservableObject {
     /// Loads the key only when it is needed (AI reply or the AI prefs page), never at app start.
     func loadKeyAsync(_ done: (() -> Void)? = nil) {
         guard !keyLoaded else { done?(); return }
-        guard ProcessInfo.processInfo.environment["ICQ_SNAPSHOT"] == nil else { keyLoaded = true; done?(); return }
+        guard !Persist.testMode else { keyLoaded = true; done?(); return }
         guard !loadStarted else { return }
         loadStarted = true
         DispatchQueue.global(qos: .utility).async {

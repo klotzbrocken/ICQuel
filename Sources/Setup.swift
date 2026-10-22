@@ -2,16 +2,26 @@ import SwiftUI
 import AppKit
 
 /// First-start assistant: ID + nickname (visual only), optional Messages bridge, optional AI chat + first bot.
+enum Setup {
+    /// Debug builds: ICQ_STEP=n opens the assistant on page n with the optional parts switched on (for screenshots).
+    static var debugStep: Int? {
+        #if DEBUG
+        return Int(ProcessInfo.processInfo.environment["ICQ_STEP"] ?? "")
+        #else
+        return nil
+        #endif
+    }
+}
 struct SetupView: View {
     static let size = CGSize(width: 500, height: 460)
-    @State private var step = Int(ProcessInfo.processInfo.environment["ICQ_STEP"] ?? "") ?? 0   // self-test only
+    @State private var step = Setup.debugStep ?? 0
     @State private var uin = Store.shared.uin
     @State private var nick = Store.shared.nick
-    @State private var bridge = ProcessInfo.processInfo.environment["ICQ_STEP"] != nil
+    @State private var bridge = Setup.debugStep != nil
     @State private var bridgeName = ""
     @State private var bridgeHandle = ""
     @State private var bridgeMsg = ""
-    @State private var ai = ProcessInfo.processInfo.environment["ICQ_STEP"] != nil
+    @State private var ai = Setup.debugStep != nil
     @State private var key = ""
     @State private var botName = ""
     @State private var preset = "friend"
