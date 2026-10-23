@@ -78,12 +78,15 @@ struct ModernMain: View {
     @State private var openOn = true
     @State private var openOff = true
     @State private var openIM = true
+    @State private var openBots = true
     static let size = CGSize(width: 272, height: 560)
     var body: some View {
         let o = s.opts
         let live = s.contacts.filter(\.isLive).sorted { $0.name.lowercased() < $1.name.lowercased() }
-        let on = s.contacts.filter { !$0.isLive && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
-        let off = o.mOffline ? s.contacts.filter { c in !c.isLive && !on.contains(c) }.sorted { $0.name.lowercased() < $1.name.lowercased() } : []
+        let bots = s.contacts.filter(\.isBot).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let shown: (Contact) -> Bool = { !$0.isLive && !$0.isBot && !(s.hideDemo && $0.isDemo) }
+        let on = s.contacts.filter { shown($0) && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let off = o.mOffline ? s.contacts.filter { c in shown(c) && !on.contains(c) }.sorted { $0.name.lowercased() < $1.name.lowercased() } : []
         VStack(spacing: 10) {
             if o.mProfile { HStack(spacing: 12) {
                 flowerImage(true, 64)
@@ -119,6 +122,7 @@ struct ModernMain: View {
                 VStack(alignment: .leading, spacing: 0) {
                     group("Online", on.count, $openOn); if openOn { ForEach(on) { row($0, offline: false) } }
                     if o.mIMessage { group("iMessage", live.count, $openIM).padding(.top, 4); if openIM { ForEach(live) { row($0, offline: false) }; if s.bridgeEnabled { Button("Import from Messages…") { ICQ.openMessagesImport() }.buttonStyle(.link).padding(.leading, 22).padding(.vertical, 3) } } }
+                    if !bots.isEmpty { group("Robot", bots.count, $openBots).padding(.top, 4); if openBots { ForEach(bots) { row($0, offline: false) } } }
                     if o.mOffline { group("Offline", off.count, $openOff).padding(.top, 4); if openOff { ForEach(off) { row($0, offline: true) } } }
                 }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
             }.background(Color(nsColor: .textBackgroundColor)).overlay(Rectangle().stroke(Color(white: 0.7)))
@@ -145,7 +149,7 @@ struct ModernMain: View {
             Spacer()
         }.padding(.leading, 22).padding(.vertical, 3).background(sel ? Color.accentColor.opacity(0.35) : Color.clear).contentShape(Rectangle())
             .onTapGesture(count: 2) { ICQ.openSession(c.uin) }
-            .onTapGesture { s.selected = c.uin }
+            .simultaneousGesture(TapGesture().onEnded { s.selected = c.uin })   // select at once, do not wait for a possible second click
             .overlay(RightClick { s.selected = c.uin; popMenu([MItem("Send Message") { ICQ.openSession(c.uin) }, MItem("History") { ICQ.openArchive(c.uin) }] + ICQ.contactItems(c) + (c.isBot ? [MItem("AI Assistant Mode", checked: c.isAssistant) { s.toggleAssistant(c.uin) }] : []) + [.separator(), MItem("Delete") { ICQ.confirmDelete(c.uin) }]) })
     }
     func bigButton(_ sym: String, _ title: String, _ action: @escaping () -> Void) -> some View {
@@ -159,8 +163,9 @@ struct ModernMain: View {
 struct SessionView: View {
     let uin: String
     @ObservedObject var s = Store.shared
-    @State private var text = ""
+    @State private var text: String
     static let size = CGSize(width: 560, height: 460)
+    init(uin: String) { self.uin = uin; _text = State(initialValue: Store.shared.aiDrafts[uin] ?? "") }   // an AI draft (never sent by the app) is put into the edit box
     var body: some View {
         let c = s.contact(uin) ?? Contact(name: "?", uin: uin), h = (s.history[uin] ?? []).suffix(300)
         VStack(spacing: 10) {
@@ -177,19 +182,23 @@ struct SessionView: View {
                 }.background(Color(nsColor: .textBackgroundColor)).overlay(Rectangle().stroke(Color(white: 0.7)))
                 .onAppear { p.scrollTo("end") }.onChange(of: h.count) { _ in p.scrollTo("end") }
             }
+            if s.drafting.contains(uin) { Text("AI is preparing a reply draft…").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
+            if s.aiDrafts[uin] != nil { Text("AI draft: check and edit it. Nothing is sent until you press Send.").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
             HStack(spacing: 8) {
                 TextField("", text: $text).textFieldStyle(.roundedBorder).onSubmit(send)
                 Button("☺") { text += " :-)" }.help("Insert a smiley")
+                if s.aiEnabled { Button("🐟") { s.babelMenu(text) { text = $0 } }.help("Babel Fish: translate this text") }
             }
             HStack { Spacer(); Button("Send", action: send).keyboardShortcut(.defaultAction); Button("Close") { WinMgr.shared.close("sess" + uin) }.keyboardShortcut(.cancelAction) }
         }.padding(12).frame(minWidth: 420, minHeight: 320)
             .onAppear { clear() }.onChange(of: s.history[uin]?.count) { _ in clear() }
+            .onChange(of: s.aiDrafts[uin]) { if let d = $0, text.isEmpty { text = d } }
             .onChange(of: text) { [text] new in if new.count != text.count { Sound.play(new.count > text.count ? "msgtype" : "msgback") } }
     }
     func clear() { if s.unread[uin] != nil { s.unread[uin] = nil; ICQ.refreshTray() } }
     func send() {
         let v = text.trimmingCharacters(in: .whitespacesAndNewlines); guard !v.isEmpty else { return }
-        s.log(uin, "out", v); Sound.play("msgsent"); text = ""; s.botReply(uin)
+        s.log(uin, "out", v); Sound.play("msgsent"); text = ""; s.botReply(uin); s.aiDrafts[uin] = nil
     }
 }
 

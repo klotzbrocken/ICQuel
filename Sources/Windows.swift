@@ -67,6 +67,9 @@ struct PrefsView: View {
     @State private var mins = String(Store.shared.minutes)
     @State private var first = Store.shared.demoFirst
     @State private var autoAway = Store.shared.autoAway
+    @State private var draftIM = Store.shared.aiDraftIMessage
+    @State private var autoAddIM = Store.shared.bridgeAutoAdd
+    @State private var replyText = Store.shared.autoReplyText
     @State private var autoMin = String(Store.shared.autoAwayMin)
     @State private var autoDND = Store.shared.autoAwayDND
     @State private var key = Store.shared.apiKey
@@ -90,7 +93,7 @@ struct PrefsView: View {
     @State private var optModern = Theme.isModern
     @State private var bridgeMsg = ""
     /// Retro window height per page, so there are no large empty grey areas.
-    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 440, 3: 470, 4: 530, 5: 395, 6: 490, 7: 400, 8: 450]
+    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 395, 6: 600, 7: 400, 8: 620]
     static let icons: [(String, Color)] = [("person.crop.circle.fill", .blue), ("person.2.fill", .green), ("tray.and.arrow.down.fill", .orange), ("text.bubble.fill", .teal), ("speaker.wave.2.fill", .pink),
                                            ("lock.fill", .gray), ("sparkles", .purple), ("macwindow", .indigo), ("message.badge.filled.fill", Color(red: 0.2, green: 0.78, blue: 0.35))]
     /// The first page grows with the number of installed themes (+ room for the fan-made note).
@@ -144,7 +147,7 @@ struct PrefsView: View {
                 switch tab {
                 case 4: SoundsPage().padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color.gray98).overlay(Bevel())
                 case 5: SecurityPage().padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color.gray98).overlay(Bevel())
-                default: Page { pageBody }
+                default: Page { ScrollView { VStack(alignment: .leading, spacing: 4) { pageBody }.frame(maxWidth: .infinity, alignment: .topLeading) } }   // long pages scroll: OK / Cancel / Apply stay visible
                 }
             }.padding(.top, -1)
             HStack {
@@ -192,6 +195,7 @@ struct PrefsView: View {
             }.padding(.top, 4)
             Text("Network connection: coming soon.").foregroundColor(.hint).padding(.top, 4)
         case 1:
+            RCheck(title: "Hide demo contacts (the made-up sample friends)", on: Binding(get: { s.hideDemo }, set: { s.hideDemo = $0; s.save() }))
             Text("Name list:")
             Sunken { ScrollView { VStack(spacing: 0) {
                 ForEach(s.contacts) { c in
@@ -218,6 +222,7 @@ struct PrefsView: View {
                 RCheck(title: "Switch my status automatically when I do not use the Mac", on: $autoAway)
                 HStack(spacing: 5) { Text("after"); RField(text: $autoMin).frame(width: 50); Text("minutes to") }
                 HStack(spacing: 14) { RRadio(title: "Away", on: !autoDND) { autoDND = false }; RRadio(title: "Do Not Disturb", on: autoDND) { autoDND = true } }
+                Text("Tip: link a macOS Focus to the status. Shortcuts > Automation > Focus > Open URL: icquel://status/dnd (and icquel://status/online when it ends). Also available: away, na, occupied, ffc, invisible, offline.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
                 Text("While Away, N/A, Occupied or Do Not Disturb is set, no sample messages and no chatbot messages arrive (not even silently). Real iMessages still do. The status switches back when you use the Mac again.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
             }.padding(.top, 8)
         case 3:
@@ -231,6 +236,17 @@ struct PrefsView: View {
         case 8:
             RCheck(title: "Enable the Messages bridge (iMessage through the Messages app of this Mac)", on: $bridgeOn)
             Text("Status: " + (bridgeOn ? s.bridgeStatus : "Off")).foregroundColor(.hint).padding(.top, 2)
+            RCheck(title: "Also show new iMessages from people I have not imported yet (adds them as contacts)", on: $autoAddIM)
+            Text("Off by default: then only the conversations you import are read.").foregroundColor(.hint)
+            RGroup(title: "Automatic reply while I am away") {
+                RCheck(title: "Reply automatically to iMessages while my status is Away, N/A, Occupied or DND", on: Binding(get: { s.autoReplyOn }, set: { v in
+                    if !v { s.autoReplyOn = false; s.save(); return }
+                    retroBox("Send automatic replies?", "While your status is Away, N/A, Occupied or Do Not Disturb, ICQuel sends the reply text below by iMessage, in your name, to contacts that you marked with \"Allow auto-reply\" (right-click a contact > Edit Contact). One reply per contact every 6 hours, only in one-to-one iMessage chats.\n\nDo you really want ICQuel to send messages on its own?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.autoReplyOn = true; s.save() } }
+                }))
+                Text("Reply text:"); RText(text: $replyText).frame(height: 44)
+                if s.aiEnabled { RCheck(title: "Let the AI write the reply (it only says that I cannot answer now)", on: Binding(get: { s.autoReplyAI }, set: { s.autoReplyAI = $0; s.save() })) }
+                Text("Nobody gets a reply unless you ticked \"Allow auto-reply\" for that contact.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
+            }.padding(.top, 4)
             HStack {
                 RButton(title: "1. Full Disk Access…", minWidth: 130) { _ = Bridge.checkAccess(); Bridge.openPrivacySettings() }
                 RButton(title: "Show app in Finder", minWidth: 120) { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
@@ -300,6 +316,22 @@ struct PrefsView: View {
             }
             RCheck(title: "Enable real chats with the AI", on: $ai)
             Text("Off = chatbots answer with sample messages (no network).\nOn = replies come from the AI API using your key.").foregroundColor(.hint).padding(.top, 2)
+            if ai {
+                RCheck(title: "Prepare replies to iMessages (AI draft, never sent)", on: Binding(get: { draftIM }, set: { v in
+                    if !v { draftIM = false; return }
+                    retroBox("Prepare iMessage replies?", "When a real iMessage arrives, the text of that chat (the latest messages) is sent to the Anthropic API with your key, and the AI writes a reply DRAFT. The draft only appears in the reply window; nothing is ever sent to your contact unless you press Send yourself.\n\nDo you really want this?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { draftIM = true } }
+                }))
+                Text("Only for iMessage contacts. You always review and send the text yourself.").foregroundColor(.hint)
+                RCheck(title: "Summarize what I missed when I am back (Away / DND ends)", on: Binding(get: { s.aiSummary }, set: { v in
+                    if !v { s.aiSummary = false; s.save(); return }
+                    retroBox("Summarize missed messages?", s.aiLocal ? "When your Away / DND status ends, the AI writes one line per unread iMessage chat. This runs on your Mac." : "When your Away / DND status ends, the unread iMessages are sent to the Anthropic API with your key and the AI writes one line per chat.\n\nDo you really want this?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.aiSummary = true; s.save() } }
+                }))
+                if LocalAI.available {
+                    RCheck(title: "Use Apple's on-device model for drafts, translation, summaries and auto-replies (private, no API key)", on: Binding(get: { s.aiLocal }, set: { s.aiLocal = $0; AIChat.useLocal = $0; s.save() }))
+                } else {
+                    Text("On-device model (Apple Intelligence): not available on this Mac yet (\(LocalAI.status)).").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Text("Note: by default chatbots play a chat friend and do not announce that they are an AI. They are still AI chatbots; tick \"Act as a normal AI assistant\" on a bot for answers that say so.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
             RGroup(title: "AI Chatbots") {
                 Sunken { ScrollView { VStack(spacing: 0) {
@@ -333,7 +365,7 @@ struct PrefsView: View {
     func apply() {
         s.nick = nick.trimmingCharacters(in: .whitespaces).isEmpty ? s.nick : nick.trimmingCharacters(in: .whitespaces)
         s.uin = uin.trimmingCharacters(in: .whitespaces).isEmpty ? s.uin : uin.trimmingCharacters(in: .whitespaces)
-        s.sounds = sounds; s.freqEnabled = enabled; s.freqMode = mode; s.minutes = max(1, Int(mins) ?? s.minutes); s.demoFirst = first; s.autoAway = autoAway; s.autoAwayMin = max(1, Int(autoMin) ?? s.autoAwayMin); s.autoAwayDND = autoDND
+        s.sounds = sounds; s.freqEnabled = enabled; s.freqMode = mode; s.minutes = max(1, Int(mins) ?? s.minutes); s.demoFirst = first; s.aiDraftIMessage = draftIM && ai; s.autoReplyText = replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? s.autoReplyText : replyText; s.bridgeAutoAdd = autoAddIM; s.autoAway = autoAway; s.autoAwayMin = max(1, Int(autoMin) ?? s.autoAwayMin); s.autoAwayDND = autoDND
         if themeChoice != Assets.currentChoiceId() { Assets.select(themeChoice); s.save(); DispatchQueue.main.async { ICQ.relayout() } }
         else if UI.scale != scaleChoice { UI.scale = scaleChoice; s.save(); DispatchQueue.main.async { ICQ.relayout() } }
         let nm = appNameDraft.trimmingCharacters(in: .whitespaces); if nm != s.appName { s.appName = nm.isEmpty ? "ICQuel" : nm; s.save(); AppDelegate.rebuildMenu() }

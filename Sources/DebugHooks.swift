@@ -14,6 +14,7 @@ enum DebugHooks {
         s.contacts = (0..<8).map { _ in Contact(name: pool.removeLast(), uin: Store.newUin()) }
         s.simulatePresence()
         for _ in 0..<3 { _ = s.addBridgeContact(names.removeLast(), handle: "+4915\(Int.random(in: 10_000_000...99_999_999))") }
+        _ = s.addBot("Pixel", persona: "A friendly chat buddy.", preset: "friend"); s.aiEnabled = true; s.bridgeEnabled = true
     }
     static func dummyChat() {
         let s = Store.shared
@@ -31,7 +32,9 @@ enum DebugHooks {
                 do { let t = try Assets.importPack(from: URL(fileURLWithPath: pk)); Assets.select("pack:" + t.id); print("imported", t.name) } catch { print("import failed:", error.localizedDescription) }
             }
             let steps: [(String, () -> Void)] = [("main", { DebugHooks.dummyData(); ICQ.openMain() }), ("setup", { ICQ.start(force: true) }), ("conn", { ICQ.connecting() }), ("edit", { if let c = Store.shared.contacts.first { ICQ.openContactEdit(c.uin) } }),
-                                       ("incoming", { DebugHooks.dummyChat() }), ("send", { if let c = Store.shared.contacts.first { ICQ.openSend(c.uin) } }), ("about", { ICQ.openAbout() }), ("add", { ICQ.openAdd() }), ("p0", { ICQ.openPrefs(0) }), ("p1", { ICQ.openPrefs(1) }), ("p2", { ICQ.openPrefs(2) }), ("p3", { ICQ.openPrefs(3) }), ("p4", { ICQ.openPrefs(4) }), ("p6", { ICQ.openPrefs(6) }), ("p7", { ICQ.openPrefs(7) }), ("p8", { ICQ.openPrefs(8) }), ("away", { ICQ.confirmDelete("x") })]
+                                       ("incoming", { DebugHooks.dummyChat() }), ("hidedemo", { Store.shared.hideDemo = true; ICQ.openMain() }),
+                ("im-in", { let s = Store.shared; if let c = s.contacts.first(where: \.isLive) { s.log(c.uin, "in", "Are we still on for tonight?"); s.deliver(to: c, text: "See you at 8?"); ICQ.openIncoming(c.uin) } }),
+                ("im-send", { let s = Store.shared; if let c = s.contacts.first(where: \.isLive) { s.aiDrafts[c.uin] = "Yes, 8 works for me. See you there!"; ICQ.openSend(c.uin) } }), ("send", { if let c = Store.shared.contacts.first { ICQ.openSend(c.uin) } }), ("about", { ICQ.openAbout() }), ("add", { ICQ.openAdd() }), ("p0", { ICQ.openPrefs(0) }), ("p1", { ICQ.openPrefs(1) }), ("p2", { ICQ.openPrefs(2) }), ("p3", { ICQ.openPrefs(3) }), ("p4", { ICQ.openPrefs(4) }), ("p6", { ICQ.openPrefs(6) }), ("p7", { ICQ.openPrefs(7) }), ("p8", { ICQ.openPrefs(8) }), ("away", { ICQ.confirmDelete("x") })]
             let only = ProcessInfo.processInfo.environment["ICQ_ONLY"]?.split(separator: ",").map(String.init)
             for (i, st) in steps.filter({ only == nil || only!.contains($0.0) }).enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + Double(i) * 1.2) { WinMgr.shared.closeAll(); st.1(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { WinMgr.shared.snapshot(to: dir, prefix: st.0 + "-") } }

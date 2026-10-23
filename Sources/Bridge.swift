@@ -39,13 +39,13 @@ enum Bridge {
         return sqlite3_column_int64(st, 0)
     }
 
-    struct Incoming { var rowid: Int64; var handle: String; var text: String; var date: Date }
+    struct Incoming { var rowid: Int64; var handle: String; var text: String; var date: Date; var imessage: Bool; var group: Bool }
     /// Incoming (not from me) messages with an id above `after`; reactions are skipped.
     static func incoming(after: Int64) -> [Incoming] {
         guard let db = open() else { return [] }
         defer { sqlite3_close(db) }
         let sql = """
-        SELECT m.ROWID, m.text, m.attributedBody, m.date, h.id FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
+        SELECT m.ROWID, m.text, m.attributedBody, m.date, h.id, m.service, m.cache_roomnames IS NOT NULL FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
         WHERE m.ROWID > ?1 AND m.is_from_me = 0 AND (m.associated_message_type IS NULL OR m.associated_message_type = 0) ORDER BY m.ROWID LIMIT 200
         """
         var st: OpaquePointer?
@@ -58,7 +58,8 @@ enum Bridge {
             let text = messageText(st, 1, 2)
             let date = Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 3)) / 1_000_000_000)
             let handle = sqlite3_column_text(st, 4).map { String(cString: $0) } ?? ""
-            out.append(Incoming(rowid: id, handle: handle, text: text, date: date))
+            let service = sqlite3_column_text(st, 5).map { String(cString: $0) } ?? ""
+            out.append(Incoming(rowid: id, handle: handle, text: text, date: date, imessage: service == "iMessage", group: sqlite3_column_int(st, 6) != 0))
         }
         return out
     }

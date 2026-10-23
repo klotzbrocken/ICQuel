@@ -68,7 +68,8 @@ enum ICQ {
     /// Entries appended to the right-click menus of the contact lists.
     static func contactItems(_ c: Contact) -> [NSMenuItem] {
         [MItem("Edit Contact…") { openContactEdit(c.uin) }, MItem("Send Mail…", enabled: c.mailAddr != nil) { mail(c) },
-         MItem("FaceTime Video", enabled: c.callTarget != nil) { faceTime(c, audio: false) }, MItem("FaceTime Audio", enabled: c.callTarget != nil) { faceTime(c, audio: true) }]
+         MItem("FaceTime Video", enabled: c.callTarget != nil) { faceTime(c, audio: false) }, MItem("FaceTime Audio", enabled: c.callTarget != nil) { faceTime(c, audio: true) },
+         MItem("Prepare AI Reply Draft", enabled: c.isLive && s.aiEnabled && s.aiDraftIMessage) { s.prepareDraft(for: c) }]
     }
     static func openArchive(_ u: String? = nil) { WinMgr.shared.open("archive", "Message Archive", 480, 360, resizable: Theme.isModern) { ArchiveView(cur: u ?? s.selected) } }
     static func openBot(_ u: String?) { let id = "bot" + (u ?? "new"); WinMgr.shared.open(id, u == nil ? "New AI Chatbot" : "Edit AI Chatbot", BotView.size.width, BotView.size.height) { BotView(uin: u) } }
@@ -96,7 +97,10 @@ enum ICQ {
         }
     }
 
-    static func statusItems() -> [NSMenuItem] { Status.allCases.map { st in MItem(st.menuLabel, icon: st.rawValue, checked: s.status == st) { setStatus(st) } } }
+    static func statusItems() -> [NSMenuItem] {
+        Status.allCases.map { st in MItem(st.menuLabel, icon: st.rawValue, checked: s.status == st) { setStatus(st) } }
+            + [NSMenuItem.separator(), MItem("What Did I Miss?", enabled: s.aiEnabled && s.bridgeEnabled) { s.summarizeUnread(manual: true) }]
+    }
     static func statusMenu() {
         let na = { comingSoon() }
         func st(_ x: Status) -> RMItem { RMItem(title: x.menuLabel, icon: x.rawValue, fn: { setStatus(x) }) }
@@ -212,6 +216,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugHooks.run()
         #endif
         NSApp.activate(ignoringOtherApps: true)
+    }
+    /// icquel://status/<away|dnd|online|...>: lets a Shortcuts Focus automation set the status.
+    func application(_ app: NSApplication, open urls: [URL]) {
+        for u in urls where u.scheme == "icquel" && u.host == "status" {
+            if let st = Status(rawValue: u.lastPathComponent.lowercased()), !Store.shared.uin.isEmpty { Store.shared.status = st; Store.shared.save(); ICQ.refreshTray() }
+        }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows f: Bool) -> Bool {

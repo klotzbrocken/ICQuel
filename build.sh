@@ -6,7 +6,7 @@ APP=${APP_OUT:-ICQuel.app}   # APP_OUT: other output path (tools/screenshots.sh)
 rm -rf $APP; mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 source ./update.conf; source ./VERSION
 for ARCH in arm64 x86_64; do   # universal binary
-    swiftc -O -swift-version 5 ${DEBUG_BUILD:+-DDEBUG} -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts \
+    swiftc -O -swift-version 5 ${DEBUG_BUILD:+-DDEBUG} -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts -Xlinker -weak_framework -Xlinker FoundationModels \
         -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
 lipo -create /tmp/icquel-arm64 /tmp/icquel-x86_64 -output $APP/Contents/MacOS/ICQuel
@@ -46,6 +46,7 @@ cat > $APP/Contents/Info.plist <<'E'
 <key>NSHighResolutionCapable</key><true/>
 <key>NSContactsUsageDescription</key><string>Used only by the optional Messages bridge to show the names of your iMessage contacts.</string>
 <key>NSAppleEventsUsageDescription</key><string>Used only by the optional Messages bridge to send messages through the Messages app.</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>ICQuel status</string><key>CFBundleURLSchemes</key><array><string>icquel</string></array></dict></array>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 E

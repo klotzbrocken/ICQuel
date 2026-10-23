@@ -126,9 +126,11 @@ struct MainView: View {
     // MARK: contact list box (with its own scroll bar in advanced mode)
     func list(simple: Bool, w boxW: CGFloat, h listH: CGFloat) -> some View {
         let live = s.contacts.filter(\.isLive).sorted { $0.name.lowercased() < $1.name.lowercased() }
-        let on = s.contacts.filter { !$0.isLive && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let bots = s.contacts.filter(\.isBot).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let shown: (Contact) -> Bool = { !$0.isLive && !$0.isBot && !(s.hideDemo && $0.isDemo) }
+        let on = s.contacts.filter { shown($0) && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
         let o = s.opts
-        let off = o.showOffline ? s.contacts.filter { c in !c.isLive && !on.contains(c) }.sorted { $0.name.lowercased() < $1.name.lowercased() } : []
+        let off = o.showOffline ? s.contacts.filter { c in shown(c) && !on.contains(c) }.sorted { $0.name.lowercased() < $1.name.lowercased() } : []
         let viewH = listH - 4, track = listH - 4 - 32
         let needsBar = !simple && scroll.content > viewH                  // scroll bar only when the list does not fit
         let barW: CGFloat = needsBar ? 15 : 0, contentW = boxW - 4 - barW
@@ -144,17 +146,18 @@ struct MainView: View {
                             flat("To Advanced Mode") { ICQ.setSimple(false) }
                             if o.btnRandom { flat("Find Random Chat Partner") { comingSoon() } }
                         }.padding(.horizontal, 4).padding(.top, 4).padding(.bottom, 6)
-                        ForEach(on + live + off) { row($0, offline: !(on + live).contains($0)) }
+                        ForEach(on + live + bots + off) { row($0, offline: !(on + live + bots).contains($0)) }
                     } else if tab == 0 {
                         header("Online"); ForEach(on) { row($0, offline: false) }
                         if o.showIMessage { header("iMessage"); ForEach(live) { row($0, offline: false) }; if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() }.padding(.horizontal, 4).padding(.vertical, 2) } }
+                        if !bots.isEmpty { header("Robot"); ForEach(bots) { row($0, offline: false) } }
                         if o.showOffline { header("Offline"); ForEach(off) { row($0, offline: true) } }
                     } else {
-                        ForEach((on + live + off).sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live).contains(c)) }
+                        ForEach((on + live + bots + off).sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live + bots).contains(c)) }
                     }
                     if !simple {
                         // the button block sits at the bottom of the list: hidden rows/buttons never leave gaps below it
-                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (o.showOffline ? 1 : 0)) + (o.showIMessage && s.bridgeEnabled ? 19 : 0) : 20 * (on.count + live.count + off.count)
+                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + bots.count + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (bots.isEmpty ? 0 : 1) + (o.showOffline ? 1 : 0)) + (o.showIMessage && s.bridgeEnabled ? 19 : 0) : 20 * (on.count + live.count + bots.count + off.count)
                         let nb = CGFloat((o.btnInstructions ? 1 : 0) + 1 + (o.btnRandom ? 1 : 0) + (o.btnWeb ? 1 : 0) + (o.btnCool ? 1 : 0))
                         Color.clear.frame(height: max(0, viewH - CGFloat(rows) - (nb * 15 + (nb - 1) * 2 + 10)))
                         VStack(spacing: 2) {
@@ -201,7 +204,7 @@ struct MainView: View {
             Spacer(minLength: 0)
         }.padding(.leading, 5).frame(height: 20).background(sel ? Color.navy : Color.clear).contentShape(Rectangle())
             .onTapGesture(count: 2) { pending ? ICQ.openIncoming(c.uin) : ICQ.openSend(c.uin) }
-            .onTapGesture { s.selected = c.uin }
+            .simultaneousGesture(TapGesture().onEnded { s.selected = c.uin })   // select at once, do not wait for a possible second click
             .overlay(RightClick { s.selected = c.uin; popMenu([MItem("Send Message") { ICQ.openSend(c.uin) }, MItem("History") { ICQ.openArchive(c.uin) }] + ICQ.contactItems(c) + (c.isBot ? [MItem("AI Assistant Mode", checked: c.isAssistant) { s.toggleAssistant(c.uin) }] : []) + [.separator(), MItem("Delete") { ICQ.confirmDelete(c.uin) }]) })
     }
 }

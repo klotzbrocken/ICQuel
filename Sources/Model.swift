@@ -26,7 +26,10 @@ struct Contact: Identifiable, Codable, Hashable {
     var preset: String? = nil      // relationship preset id (see Presets); nil/"custom" = description only
     var bridge: String? = nil      // phone number / e-mail of an iMessage contact reached through the Messages bridge
     var email: String? = nil, phone: String? = nil   // optional details for "Send Mail" and FaceTime
+    var autoReply: Bool? = nil     // may get an automatic away reply (needs Auto-reply on in Preferences > Bridge)
     var isLive: Bool { bridge != nil }
+    /// A made-up sample friend (neither an AI chatbot nor an iMessage contact): can be hidden in Preferences.
+    var isDemo: Bool { persona == nil && bridge == nil }
     /// Address for "Send Mail": the e-mail field, or the iMessage handle when that is an e-mail address.
     var mailAddr: String? { if let e = email, !e.isEmpty { return e }; if let b = bridge, b.contains("@") { return b }; return nil }
     /// Number / address for FaceTime: the phone field, or the iMessage handle.
@@ -84,6 +87,8 @@ private struct Saved: Codable {
     var appName: String? = nil
     var bridgeEnabled: Bool? = nil, bridgeLast: Int64? = nil
     var autoAway: Bool? = nil, autoAwayMin: Int? = nil, autoAwayDND: Bool? = nil
+    var hideDemo: Bool? = nil, aiDraftIMessage: Bool? = nil, bridgeAutoAdd: Bool? = nil
+    var aiLocal: Bool? = nil, aiSummary: Bool? = nil, autoReplyOn: Bool? = nil, autoReplyText: String? = nil, autoReplyAI: Bool? = nil, autoReplied: [String: Double]? = nil
 }
 
 /// Contacts, bots, history and settings live in ~/Library/Application Support/ICQ99b/store.json (one backup copy is kept),
@@ -98,6 +103,7 @@ enum Persist {
     static var dir: URL {
         let fm = FileManager.default
         if testMode { return fm.temporaryDirectory.appendingPathComponent("icq-test-\(ProcessInfo.processInfo.processIdentifier)") }
+        if let d = ProcessInfo.processInfo.environment["ICQUEL_DATA_DIR"], !d.isEmpty { return URL(fileURLWithPath: d, isDirectory: true) }   // e.g. tools/demo.sh: run on made-up data
         return fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ICQuel")
     }
     /// Data written by the first versions (folder "ICQ99b") is copied over once.
@@ -133,7 +139,15 @@ final class Store: ObservableObject {
     static let shared = Store()
     @Published var uin = ""
     @Published var nick = ""
-    @Published var status = Status.online
+    @Published var status = Status.online {
+        didSet {
+            guard status != oldValue else { return }
+            statusSince = Date()
+            let quietSet: Set<Status> = [.away, .na, .occupied, .dnd]
+            if quietSet.contains(oldValue) && !quietSet.contains(status) && aiSummary && aiEnabled { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.summarizeUnread() } }
+        }
+    }
+    var statusSince = Date()
     @Published var sounds = true
     @Published var contacts: [Contact] = []
     @Published var freqEnabled = true
@@ -152,6 +166,18 @@ final class Store: ObservableObject {
     @Published var autoAway = false          // switch to Away / DND after some minutes without keyboard or mouse use
     @Published var autoAwayMin = 15
     @Published var autoAwayDND = false       // false = Away, true = Do Not Disturb
+    @Published var hideDemo = false          // hide the made-up sample contacts
+    @Published var bridgeAutoAdd = false     // new 1:1 iMessages from people that are not imported yet create a contact (off by default: privacy)
+    @Published var aiDraftIMessage = false   // AI writes a reply DRAFT for incoming iMessages (never sent by the app)
+    @Published var aiDrafts: [String: String] = [:]
+    @Published var aiLocal = false           // Apple's on-device model for drafts, translation, summaries and auto-replies
+    @Published var aiSummary = false         // "what did I miss" summary when I am back
+    @Published var autoReplyOn = false       // automatic away reply to allowed contacts (iMessage)
+    @Published var autoReplyText = "Sorry, I can't answer right now. I'll get back to you later. (automatic reply)"
+    @Published var autoReplyAI = false       // the AI writes the away reply
+    var autoReplied: [String: Double] = [:]  // contact -> time of the last automatic reply
+    @Published var drafting = Set<String>()   // contacts for whom the AI is writing a draft right now
+    private var lastDraftError = Date.distantPast
     @Published var botMin = 5
     @Published var botMax = 20
     @Published var history: [String: [Msg]] = [:]
@@ -175,6 +201,10 @@ final class Store: ObservableObject {
             aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; simpleMode = s.simpleMode ?? false
             botInit = s.botInit ?? true; botMin = s.botMin ?? 5; botMax = s.botMax ?? 20; opts = s.opts ?? MainOpts(); appName = s.appName ?? "ICQuel"; bridgeEnabled = s.bridgeEnabled ?? false; bridgeLast = s.bridgeLast ?? 0
             autoAway = s.autoAway ?? false; autoAwayMin = s.autoAwayMin ?? 15; autoAwayDND = s.autoAwayDND ?? false
+            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false
+            aiLocal = s.aiLocal ?? false; aiSummary = s.aiSummary ?? false; autoReplyOn = s.autoReplyOn ?? false; autoReplyAI = s.autoReplyAI ?? false
+            if let t = s.autoReplyText, !t.isEmpty { autoReplyText = t }; autoReplied = s.autoReplied ?? [:]
+            AIChat.useLocal = aiLocal
         }
         online = Set(contacts.filter { $0.isBot || $0.isLive }.map(\.uin))   // AI chatbots and bridged contacts are always shown online
     }
@@ -192,7 +222,7 @@ final class Store: ObservableObject {
     }
     func save() {
         let s = Saved(uin: uin, nick: nick, status: status, sounds: sounds, contacts: contacts, freqEnabled: freqEnabled,
-                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND)
+                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
         if let d = try? JSONEncoder().encode(s) { Persist.write(d) }
     }
     static func newUin() -> String { String(Int.random(in: 10_000_000...99_999_999)) }
@@ -260,7 +290,7 @@ final class Store: ObservableObject {
     }
     func deliver(to chosen: Contact? = nil, text: String? = nil) {
         if chosen == nil && quiet { return }                                  // scheduled sample message while Away / DND
-        guard status != .offline, let c = chosen ?? contacts.filter({ online.contains($0.uin) && !$0.isLive }).randomElement() else { return }
+        guard status != .offline, let c = chosen ?? contacts.filter({ online.contains($0.uin) && !$0.isLive && !(hideDemo && $0.isDemo) }).randomElement() else { return }
         var t = text ?? ""
         if text == nil { var i: Int; repeat { i = Int.random(in: 0..<dummyMessages.count) } while i == lastMsg; lastMsg = i; t = dummyMessages[i] }
         let m = Msg(dir: "in", text: t, t: Date())
@@ -292,6 +322,7 @@ final class Store: ObservableObject {
             guard bridgeEnabled else { notice("The Messages bridge is off.\nTurn it on in Preferences > Bridge."); return }
             guard status != .offline else { notice("You are offline."); return }
             guard let last = history[uin]?.last, last.dir == "out" else { return }
+            aiDrafts[uin] = nil
             Bridge.send(last.text, to: h) { err in if let err { notice("Messages could not send this message:\n\(err)") } }
             return
         }
@@ -335,7 +366,8 @@ final class Store: ObservableObject {
         guard !polling, status != .offline, contacts.contains(where: \.isLive) else { return }
         polling = true; let after = bridgeLast
         let pending = contacts.compactMap { c -> (String, String, Int)? in
-            guard let h = c.bridge, let n = unread[c.uin]?.count, n > 0 else { return nil }; return (c.uin, h, n)
+            // Messages marks a message read within seconds when its window is open: only messages that have been shown here for 2 minutes are synced
+            guard let h = c.bridge, let q = unread[c.uin], !q.isEmpty, q.allSatisfy({ Date().timeIntervalSince($0.t) > 120 }) else { return nil }; return (c.uin, h, q.count)
         }
         DispatchQueue.global(qos: .utility).async {
             let msgs = Bridge.incoming(after: after)
@@ -348,20 +380,116 @@ final class Store: ObservableObject {
                 if changed { ICQ.refreshTray() }
                 guard let top = msgs.last?.rowid else { return }
                 self.bridgeLast = top; self.save()
-                for m in msgs { if let c = self.contacts.first(where: { $0.bridge.map { Bridge.same($0, m.handle) } ?? false }) { self.deliver(to: c, text: m.text) } }
+                var touched: [Contact] = []
+                for m in msgs {
+                    var contact = self.contacts.first(where: { $0.bridge.map { Bridge.same($0, m.handle) } ?? false })
+                    if contact == nil, self.bridgeAutoAdd, m.imessage, !m.group, !m.handle.isEmpty {   // a new sender: create the contact (named from your Contacts if possible)
+                        contact = self.addBridgeContact(m.handle, handle: m.handle, importRecent: false)
+                        if let c = contact { self.nameFromContacts(c) }
+                    }
+                    if let c = contact { self.deliver(to: c, text: m.text); if !touched.contains(c) { touched.append(c) }; self.maybeAutoReply(c, m) }
+                }
+                touched.forEach { self.prepareDraft(for: $0) }
             }
         }
     }
-    @discardableResult func addBridgeContact(_ name: String, handle: String) -> Contact? {
+    /// Babel Fish: translates a text on request (needs AI on) and hands the result to `done` on the main thread.
+    func babel(_ text: String, to lang: String, done: @escaping (String) -> Void) {
+        guard aiEnabled else { notice("Turn on AI Chat in Preferences first."); return }
+        let key = apiKey, model = apiModel
+        Task {
+            do { let t = try await AIChat.translate(text, to: lang, key: key, model: model); await MainActor.run { done(t) } }
+            catch { await MainActor.run { notice("Translation failed: \(error.localizedDescription)") } }
+        }
+    }
+    /// Menu of target languages for an outgoing text.
+    func babelMenu(_ text: String, done: @escaping (String) -> Void) {
+        popMenu(["English", "German", "French", "Spanish", "Italian"].map { l in MItem("Translate to " + l) { Store.shared.babel(text, to: l, done: done) } })
+    }
+    /// AI reply draft for an iMessage contact (only if switched on in Preferences > AI Chat): stored as text for the reply window, never sent.
+    func prepareDraft(for c: Contact) {
+        guard aiEnabled, aiDraftIMessage, c.isLive, !drafting.contains(c.uin) else { return }
+        withEngine { self.prepareDraft(for: c) } run: {
+        drafting.insert(c.uin)
+        let hist = history[c.uin] ?? [], key = apiKey, model = apiModel, me = nick
+        Task {
+            do {
+                let text = try await AIChat.draft(contact: c.name, user: me, history: hist, key: key, model: model)
+                DispatchQueue.main.async { self.drafting.remove(c.uin); self.aiDrafts[c.uin] = text }
+            } catch {
+                DispatchQueue.main.async {
+                    self.drafting.remove(c.uin)
+                    if Date().timeIntervalSince(self.lastDraftError) > 60 { self.lastDraftError = Date(); notice("The AI reply draft for \(c.name) failed:\n\(error.localizedDescription)") }
+                }
+            }
+        }
+        }
+    }
+
+    // MARK: helper features on top of the engine (on-device model or API)
+    /// Runs `run` when text can be generated: with the on-device model, or with the API key (loaded first when needed).
+    func withEngine(retry: @escaping () -> Void, run: () -> Void) {
+        if aiLocal && LocalAI.available { run(); return }
+        if !keyLoaded { loadKeyAsync { retry() }; return }
+        guard !apiKey.isEmpty else { return }
+        run()
+    }
+    /// Automatic away reply: only to contacts that were allowed ("Allow auto-reply"), once per 6 hours, only 1:1 iMessage, only for messages that arrived after the status was set.
+    func maybeAutoReply(_ c: Contact, _ m: Bridge.Incoming) {
+        guard autoReplyOn, quiet, c.autoReply == true, let h = c.bridge, m.imessage, !m.group, m.date > statusSince else { return }
+        let now = Date().timeIntervalSince1970
+        if let last = autoReplied[c.uin], now - last < 6 * 3600 { return }
+        autoReplied[c.uin] = now; save()
+        let fallback = autoReplyText, statusText = status.menuLabel, me = nick
+        func send(_ t: String) {
+            Bridge.send(t, to: h) { err in DispatchQueue.main.async {
+                if let err { notice("The automatic reply to \(c.name) could not be sent:\n\(err)") } else { self.log(c.uin, "out", "↩︎ " + t) }
+            } }
+        }
+        if autoReplyAI && aiEnabled {
+            withEngine(retry: { self.maybeAutoReply(c, m) }) { [key = apiKey, model = apiModel] in
+                Task {
+                    let t = (try? await AIChat.awayReply(contact: c.name, user: me, incoming: m.text, status: statusText, key: key, model: model)) ?? fallback
+                    DispatchQueue.main.async { send(t) }
+                }
+            }
+        } else { send(fallback) }
+    }
+    /// "What did I miss": one line per unread iMessage chat.
+    func summarizeUnread(manual: Bool = false) {
+        let chats = contacts.compactMap { c -> String? in
+            guard c.isLive, let q = unread[c.uin], !q.isEmpty else { return nil }
+            return "Chat with \(c.name):\n" + q.suffix(8).map { "- " + $0.text }.joined(separator: "\n")
+        }
+        guard !chats.isEmpty else { if manual { notice("There are no unread iMessages.") }; return }
+        guard aiEnabled else { if manual { notice("Turn on AI Chat in Preferences first.") }; return }
+        withEngine(retry: { self.summarizeUnread(manual: manual) }) { [key = apiKey, model = apiModel] in
+            let text = String(chats.joined(separator: "\n\n").prefix(4000))
+            Task {
+                do {
+                    let s = try await AIChat.summarize(text, key: key, model: model)
+                    DispatchQueue.main.async { retroBox("While you were away", s, icon: "info32") }
+                } catch { DispatchQueue.main.async { if manual { notice("The summary failed:\n\(error.localizedDescription)") } } }
+            }
+        }
+    }
+    /// Contacts that carry their phone number / address as name get the real name from the Contacts app.
+    func nameFromContacts(_ c: Contact) {
+        guard let h = c.bridge else { return }
+        Bridge.names(for: [h]) { n in DispatchQueue.main.async {
+            if let nm = n[h], let i = self.contacts.firstIndex(where: { $0.uin == c.uin }), self.contacts[i].name == h { self.contacts[i].name = nm; self.save() }
+        } }
+    }
+    @discardableResult func addBridgeContact(_ name: String, handle: String, importRecent: Bool = true) -> Contact? {
         let n = name.trimmingCharacters(in: .whitespaces), h = handle.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty, !h.isEmpty else { return nil }
         let c = Contact(name: n, uin: Store.newUin(), bridge: h)
         contacts.append(c); online.insert(c.uin); save()
-        DispatchQueue.global(qos: .utility).async {      // fill the history with the last 5 iMessages (needs Full Disk Access; silently skipped otherwise)
+        if importRecent { DispatchQueue.global(qos: .utility).async {      // fill the history with the last 5 iMessages (needs Full Disk Access; silently skipped otherwise)
             let recent = Bridge.recent(handle: h, limit: 5)
             guard !recent.isEmpty else { return }
             DispatchQueue.main.async { self.history[c.uin] = recent.map { Msg(dir: $0.fromMe ? "out" : "in", text: $0.text, t: $0.date) }; self.save() }
-        }
+        } }
         return c
     }
 

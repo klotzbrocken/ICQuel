@@ -171,10 +171,11 @@ struct ContactEditView: View {
     @State private var name: String
     @State private var email: String
     @State private var phone: String
-    static let size = CGSize(width: 360, height: 250)
+    @State private var autoReply: Bool
+    static let size = CGSize(width: 360, height: 290)
     init(uin: String) {
         self.uin = uin; let c = Store.shared.contact(uin)
-        _name = State(initialValue: c?.name ?? ""); _email = State(initialValue: c?.email ?? ""); _phone = State(initialValue: c?.phone ?? "")
+        _name = State(initialValue: c?.name ?? ""); _email = State(initialValue: c?.email ?? ""); _phone = State(initialValue: c?.phone ?? ""); _autoReply = State(initialValue: c?.autoReply ?? false)
     }
     var body: some View {
         let c = Store.shared.contact(uin)
@@ -183,6 +184,7 @@ struct ContactEditView: View {
             Text("E-mail (\"Send Mail…\" opens your mail app):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? $0 : nil } ?? "name@example.com", text: $email)
             Text("Phone (FaceTime Video / Audio):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? nil : $0 } ?? "+49 151 1234567", text: $phone)
             if let b = c?.bridge { Text("iMessage address: \(b) (used when the fields stay empty)").foregroundColor(.hint).font(rf(10)).fixedSize(horizontal: false, vertical: true) }
+            if c?.isLive == true { RCheck(title: "Allow auto-reply when I am away (needs Auto-reply on in Preferences > Bridge)", on: $autoReply) }
             Spacer(minLength: 0)
             HStack { Spacer()
                 RButton(title: "Cancel") { WinMgr.shared.close("edit" + uin) }
@@ -192,6 +194,7 @@ struct ContactEditView: View {
                         let n = name.trimmingCharacters(in: .whitespaces); if !n.isEmpty { s.contacts[i].name = n }
                         s.contacts[i].email = email.trimmingCharacters(in: .whitespaces).isEmpty ? nil : email.trimmingCharacters(in: .whitespaces)
                         s.contacts[i].phone = phone.trimmingCharacters(in: .whitespaces).isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces)
+                        s.contacts[i].autoReply = autoReply ? true : nil
                         s.save()
                     }
                     WinMgr.shared.close("edit" + uin)

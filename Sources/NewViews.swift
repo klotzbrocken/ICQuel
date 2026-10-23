@@ -95,19 +95,27 @@ private let msgDate: (Date) -> String = { d in let f = DateFormatter(); f.dateFo
 private let msgTime: (Date) -> String = { d in let f = DateFormatter(); f.dateFormat = "H:mm"; return f.string(from: d) }
 
 struct SendView: View {
-    let uin: String; @State private var text = ""
-    static let size = CGSize(width: 334, height: 170)
+    let uin: String
+    @ObservedObject var s = Store.shared
+    @State private var text: String
+    init(uin: String) { self.uin = uin; _text = State(initialValue: Store.shared.aiDrafts[uin] ?? "") }   // an AI draft (never sent by the app) is put into the edit box
+    static let size = CGSize(width: 334, height: 173)
     var body: some View {
         let c = Store.shared.contact(uin) ?? Contact(name: "?", uin: uin)
         GeometryReader { g in
-            let W = floor(g.size.width), H = floor(g.size.height)
+            let W = floor(g.size.width), H = floor(g.size.height) - 3   // 3 px of air below the title bar
             ZStack(alignment: .topLeading) {
                 etched("To:", R(0, 0, W, 44))
-                lbl("ICQ#:", R(8, 20, 34, 14), bold: true); val(c.uin, R(42, 17, 66, 18))
-                lbl("Nick:", R(114, 20, 28, 14), bold: true); val(c.name, R(144, 17, 62, 18))
-                lbl("EMail:", R(212, 20, 36, 14), bold: true); val(c.mailAddr ?? "", R(248, 17, max(30, W - 248 - 30), 18))
+                if c.isLive {   // iMessage contact: the phone number / address instead of the ICQ number
+                    lbl("iMessage:", R(8, 20, 52, 14), bold: true); val(c.bridge ?? "", R(62, 17, 104, 18))
+                    lbl("Nick:", R(172, 20, 28, 14), bold: true); val(c.name, R(202, 17, max(30, W - 202 - 30), 18))
+                } else {
+                    lbl("ICQ#:", R(8, 20, 34, 14), bold: true); val(c.uin, R(42, 17, 66, 18))
+                    lbl("Nick:", R(114, 20, 28, 14), bold: true); val(c.name, R(144, 17, 62, 18))
+                    lbl("EMail:", R(212, 20, 36, 14), bold: true); val(c.mailAddr ?? "", R(248, 17, max(30, W - 248 - 30), 18))
+                }
                 IconBtn(name: "m_email", w: 20, h: 22) { ICQ.mail(c) }.offset(x: W - 24, y: 15)
-                lbl("Enter Message:", R(4, 52, 90, 14)); lbl("Chars:", R(100, 52, 34, 14)); val(String(text.count), R(134, 49, 30, 18))
+                lbl(Store.shared.aiDrafts[uin] != nil ? "AI draft:" : "Enter Message:", R(4, 52, 90, 14)); lbl("Chars:", R(100, 52, 34, 14)); val(String(text.count), R(134, 49, 30, 18))
                 IconBtn(name: "tool_0") {}.offset(x: 170, y: 48)
                 IconBtn(name: "tool_3") {}.offset(x: 196, y: 48)
                 IconBtn(name: "tool_4") {}.offset(x: 218, y: 48)
@@ -115,13 +123,15 @@ struct SendView: View {
                 PushBtn(label: "History") { ICQ.openArchive(uin) }.at(R(W - 60, 48, 58, 21))
                 REdit(text: $text, multiline: true).at(R(2, 72, W - 4, max(40, H - 72 - 28)))
                 Button { comingSoon() } label: { Pix(name: "more").frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.gray98) }.buttonStyle(PlainPush(isDefault: false)).at(R(2, H - 24, 52, 22))
+                if Store.shared.aiEnabled { PushBtn(label: "Babel Fish") { Store.shared.babelMenu(text) { text = $0 } }.at(R(58, H - 24, 76, 22)) }
                 PushBtn(label: "Cancel", isCancel: true) { WinMgr.shared.close("send" + uin) }.at(R(W - 146, H - 24, 70, 22))
                 PushBtn(label: "Send", isDefault: true) {
                     let v = text.trimmingCharacters(in: .whitespacesAndNewlines); guard !v.isEmpty else { return }
-                    Store.shared.log(uin, "out", v); Sound.play("msgsent"); WinMgr.shared.close("send" + uin); Store.shared.botReply(uin)
+                    Store.shared.log(uin, "out", v); Sound.play("msgsent"); WinMgr.shared.close("send" + uin); Store.shared.botReply(uin); Store.shared.aiDrafts[uin] = nil
                 }.keyboardShortcut(.return, modifiers: .command).at(R(W - 72, H - 24, 70, 22))
-            }.frame(width: W, height: H, alignment: .topLeading)
+            }.frame(width: W, height: H, alignment: .topLeading).offset(y: 3)
         }
+        .onChange(of: s.aiDrafts[uin]) { if let d = $0, text.isEmpty { text = d } }   // the draft arrived after the window was opened
         .onChange(of: text) { [text] new in
             if new.count > 450 { self.text = String(new.prefix(450)); return }
             Sound.play(new.count >= text.count ? "msgtype" : "msgback")
@@ -131,32 +141,39 @@ struct SendView: View {
 struct IncomingView: View {
     let uin: String; @ObservedObject var s = Store.shared
     @State private var textH: CGFloat = 0
+    @State private var translated: String?
     /// Messages being read in this window: they count as read as soon as the window takes them over (the envelope stops flashing).
     @State private var queue: [Msg]
     init(uin: String) { self.uin = uin; _queue = State(initialValue: Store.shared.unread[uin] ?? []) }
-    static let size = CGSize(width: 334, height: 220)
+    static let size = CGSize(width: 334, height: 223)
     static func title(_ n: Int) -> String { "Incoming Message [" + (n <= 1 ? "No More Events" : "\(n - 1) More Event" + (n == 2 ? "" : "s")) + "]" }
     var body: some View {
         let c = s.contact(uin) ?? Contact(name: "?", uin: uin), q = queue, id = "in" + uin
         let m = q.first, pop = { if !queue.isEmpty { queue.removeFirst() } }
         GeometryReader { g in
-            let W = floor(g.size.width), H = floor(g.size.height), mh = max(40, H - 92 - 70)
+            let W = floor(g.size.width), H = floor(g.size.height) - 3, mh = max(40, H - 92 - 70)
             ZStack(alignment: .topLeading) {
                 etched("From:", R(0, 0, W, 66))
                 lbl("Nick Name:", R(6, 17, 60, 14), bold: true); val(c.name, R(68, 14, 84, 18))
                 lbl("EMail:", R(158, 17, 36, 14), bold: true); val(c.mailAddr ?? "", R(196, 14, max(30, W - 196 - 28), 18))
                 IconBtn(name: "m_email", w: 20, h: 22) { ICQ.mail(c) }.offset(x: W - 24, y: 12)
-                lbl("ICQ#:", R(6, 42, 34, 14), bold: true); Pix(name: "contact", w: 16).offset(x: 42, y: 40); val(c.uin, R(62, 38, 62, 18))
-                lbl("Date:", R(130, 42, 30, 14), bold: true); val(m.map { msgDate($0.t) } ?? "", R(162, 38, 56, 18))
-                lbl("Time:", R(224, 42, 30, 14), bold: true); val(m.map { msgTime($0.t) } ?? "", R(256, 38, 50, 18))
-                lbl("Message", R(6, 72, 60, 14))
+                if c.isLive {   // iMessage contact: the phone number / address instead of the ICQ number
+                    lbl("iMessage:", R(6, 42, 52, 14), bold: true); val(c.bridge ?? "", R(60, 38, 100, 18))
+                    lbl("Date:", R(166, 42, 30, 14), bold: true); val(m.map { msgDate($0.t) } ?? "", R(198, 38, 54, 18))
+                    lbl("Time:", R(256, 42, 30, 14), bold: true); val(m.map { msgTime($0.t) } ?? "", R(288, 38, max(36, W - 288 - 4), 18))
+                } else {
+                    lbl("ICQ#:", R(6, 42, 34, 14), bold: true); Pix(name: "contact", w: 16).offset(x: 42, y: 40); val(c.uin, R(62, 38, 62, 18))
+                    lbl("Date:", R(130, 42, 30, 14), bold: true); val(m.map { msgDate($0.t) } ?? "", R(162, 38, 56, 18))
+                    lbl("Time:", R(224, 42, 30, 14), bold: true); val(m.map { msgTime($0.t) } ?? "", R(256, 38, 50, 18))
+                }
+                lbl(s.aiDrafts[uin] != nil ? "Message  ·  AI draft ready: press Reply" : (s.drafting.contains(uin) ? "Message  ·  AI is preparing a reply…" : "Message"), R(6, 72, 200, 14))
                 IconBtn(name: "tool_5") {}.offset(x: W - 102, y: 70)
                 PushBtn(label: "History") { ICQ.openArchive(uin) }.at(R(W - 76, 70, 72, 20))
                 let needsBar = textH > mh - 4
                 ZStack(alignment: .topLeading) {
                     Color.white
                     ScrollView(showsIndicators: false) {
-                        Text(m?.text ?? "").font(rf()).foregroundColor(.black).textSelection(.enabled).frame(width: max(40, W - 4 - (needsBar ? 17 : 0) - 14), alignment: .topLeading).padding(5)
+                        Text(translated ?? m?.text ?? "").font(rf()).foregroundColor(.black).textSelection(.enabled).frame(width: max(40, W - 4 - (needsBar ? 17 : 0) - 14), alignment: .topLeading).padding(5)
                             .background(GeometryReader { t in Color.clear.onAppear { textH = t.size.height }.onChange(of: t.size.height) { textH = $0 } })
                     }.frame(width: W - 4 - (needsBar ? 17 : 0), height: mh)
                     if needsBar { VScrollBar(h: mh).offset(x: W - 4 - 17, y: 0) }   // scroll bar only when the text does not fit
@@ -165,10 +182,10 @@ struct IncomingView: View {
                 PushBtn(label: "Reply", isDefault: true) { pop(); WinMgr.shared.close(id); ICQ.openSend(uin) }.at(R(8, H - 52, 66, 21))
                 PushBtn(label: "Forward") { comingSoon() }.at(R(80, H - 52, 66, 21))
                 PushBtn(label: "Request Chat") { comingSoon() }.at(R(W - 102, H - 52, 94, 21))
-                PushBtn(label: "More Functions") { popMenu([MItem("Message Archive") { ICQ.openArchive(uin) }, MItem("History") { ICQ.openArchive(uin) }]) }.at(R(2, H - 24, 104, 22))
+                PushBtn(label: "More Functions") { popMenu([MItem("Message Archive") { ICQ.openArchive(uin) }, MItem("History") { ICQ.openArchive(uin) }, MItem(translated == nil ? "Translate (Babel Fish)" : "Show Original", enabled: s.aiEnabled) { if translated != nil { translated = nil } else if let t = m?.text { Store.shared.babel(t, to: AIChat.targetLanguage) { translated = $0 } } }]) }.at(R(2, H - 24, 104, 22))
                 PushBtn(label: "Close", isCancel: true) { pop(); WinMgr.shared.close(id) }.at(R(W - 146, H - 24, 64, 22))
                 PushBtn(label: "Read Next") { pop(); WinMgr.shared.setTitle(id, IncomingView.title(max(0, q.count - 1))) }.disabled(q.count < 2).at(R(W - 78, H - 24, 76, 22))
-            }.frame(width: W, height: H, alignment: .topLeading)
+            }.frame(width: W, height: H, alignment: .topLeading).offset(y: 3)
         }
         .onAppear { if s.unread[uin] != nil { s.unread[uin] = nil; ICQ.refreshTray() } }
         .onChange(of: s.unread[uin]?.count ?? 0) { n in      // more messages arrived while the window is open
