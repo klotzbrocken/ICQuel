@@ -174,8 +174,11 @@ struct SessionView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(Array(h.enumerated()), id: \.offset) { _, m in
                             let mine = m.dir == "out", col: Color = mine ? .blue : .red
-                            (Text("[\(hhmm(m.t))] ").foregroundColor(col) + Text(mine ? s.uin : c.name).fontWeight(mine ? .regular : .bold).foregroundColor(col) + Text(": ").foregroundColor(col) + Text(m.text).foregroundColor(.primary))
-                                .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                            VStack(alignment: .leading, spacing: 4) {
+                            if !m.text.isEmpty || (m.files ?? []).isEmpty { (Text("[\(hhmm(m.t))] ").foregroundColor(col) + Text(mine ? s.uin : c.name).fontWeight(mine ? .regular : .bold).foregroundColor(col) + Text(": ").foregroundColor(col) + Text(m.text).foregroundColor(.primary))
+                                .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
+                            if let f = m.files, !f.isEmpty { if m.text.isEmpty { (Text("[\(hhmm(m.t))] ").foregroundColor(col) + Text(mine ? s.uin : c.name).fontWeight(mine ? .regular : .bold).foregroundColor(col) + Text(":").foregroundColor(col)) }; AttachList(files: f) }
+                            }
                         }
                         Color.clear.frame(height: 1).id("end")
                     }.padding(10)
@@ -187,7 +190,6 @@ struct SessionView: View {
             HStack(spacing: 8) {
                 TextField("", text: $text).textFieldStyle(.roundedBorder).onSubmit(send)
                 Button("☺") { text += " :-)" }.help("Insert a smiley")
-                if s.aiEnabled { Button("🐟") { s.babelMenu(text) { text = $0 } }.help("Babel Fish: translate this text") }
             }
             HStack { Spacer(); Button("Send", action: send).keyboardShortcut(.defaultAction); Button("Close") { WinMgr.shared.close("sess" + uin) }.keyboardShortcut(.cancelAction) }
         }.padding(12).frame(minWidth: 420, minHeight: 320)

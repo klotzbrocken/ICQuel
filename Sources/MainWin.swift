@@ -131,6 +131,7 @@ struct MainView: View {
         let on = s.contacts.filter { shown($0) && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
         let o = s.opts
         let off = o.showOffline ? s.contacts.filter { c in shown(c) && !on.contains(c) }.sorted { $0.name.lowercased() < $1.name.lowercased() } : []
+        let flatList = on + (o.showIMessage ? live : []) + bots + off   // flat lists (Simple mode, User tab) honour the same options
         let viewH = listH - 4, track = listH - 4 - 32
         let needsBar = !simple && scroll.content > viewH                  // scroll bar only when the list does not fit
         let barW: CGFloat = needsBar ? 15 : 0, contentW = boxW - 4 - barW
@@ -141,31 +142,38 @@ struct MainView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 0) {
                     if simple {
+                        ForEach(flatList) { row($0, offline: !(on + live + bots).contains($0)) }
+                        let sb = CGFloat(1 + [o.btnInstructions, s.bridgeEnabled, o.btnRandom, o.btnWeb, o.btnCool].filter { $0 }.count)
+                        Color.clear.frame(height: max(0, viewH - CGFloat(20 * flatList.count) - (sb * 15 + (sb - 1) * 2 + 10)))   // button block sits at the bottom of the list
                         VStack(spacing: 2) {
                             if o.btnInstructions { flat("Instructions") { notice(MainView.help) } }
                             flat("To Advanced Mode") { ICQ.setSimple(false) }
+                            if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() } }
                             if o.btnRandom { flat("Find Random Chat Partner") { comingSoon() } }
-                        }.padding(.horizontal, 4).padding(.top, 4).padding(.bottom, 6)
-                        ForEach(on + live + bots + off) { row($0, offline: !(on + live + bots).contains($0)) }
+                            if o.btnWeb { flat("Website") { openWeb("https://myretromac.app") } }
+                            if o.btnCool { flat(brand("ICQ Cool Links")) { ICQ.openURL("http://myretromac.app/") } }
+                        }.padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 4)
                     } else if tab == 0 {
                         header("Online"); ForEach(on) { row($0, offline: false) }
-                        if o.showIMessage { header("iMessage"); ForEach(live) { row($0, offline: false) }; if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() }.padding(.horizontal, 4).padding(.vertical, 2) } }
+                        if o.showIMessage { header("iMessage"); ForEach(live) { row($0, offline: false) } }
                         if !bots.isEmpty { header("Robot"); ForEach(bots) { row($0, offline: false) } }
                         if o.showOffline { header("Offline"); ForEach(off) { row($0, offline: true) } }
                     } else {
-                        ForEach((on + live + bots + off).sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live + bots).contains(c)) }
+                        ForEach(flatList.sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live + bots).contains(c)) }
                     }
                     if !simple {
                         // the button block sits at the bottom of the list: hidden rows/buttons never leave gaps below it
-                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + bots.count + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (bots.isEmpty ? 0 : 1) + (o.showOffline ? 1 : 0)) + (o.showIMessage && s.bridgeEnabled ? 19 : 0) : 20 * (on.count + live.count + bots.count + off.count)
-                        let nb = CGFloat((o.btnInstructions ? 1 : 0) + 1 + (o.btnRandom ? 1 : 0) + (o.btnWeb ? 1 : 0) + (o.btnCool ? 1 : 0))
+                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + bots.count + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (bots.isEmpty ? 0 : 1) + (o.showOffline ? 1 : 0)) : 20 * (on.count + live.count + bots.count + off.count)
+                        let flags: [Bool] = [o.btnInstructions, o.btnRandom, o.btnWeb, o.btnCool, s.bridgeEnabled]
+                        let nb = CGFloat(1 + flags.filter { $0 }.count)
                         Color.clear.frame(height: max(0, viewH - CGFloat(rows) - (nb * 15 + (nb - 1) * 2 + 10)))
                         VStack(spacing: 2) {
                             if o.btnInstructions { flat("Instructions") { notice(MainView.help) } }
                             flat("To Simple Mode") { ICQ.setSimple(true) }
+                            if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() } }
                             if o.btnRandom { flat("Find Random Chat Partner") { comingSoon() } }
                             if o.btnWeb { flat("Website") { openWeb("https://myretromac.app") } }
-                            if o.btnCool { flat(brand("ICQ Cool Links")) { comingSoon() } }
+                            if o.btnCool { flat(brand("ICQ Cool Links")) { ICQ.openURL("http://myretromac.app/") } }
                         }.padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 4)
                     }
                 }.frame(width: contentW).background(GeometryReader { g in

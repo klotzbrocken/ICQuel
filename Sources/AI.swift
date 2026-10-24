@@ -118,17 +118,8 @@ enum AIChat {
         return try await complete(system: system, prompt: "Incoming message: \(incoming)", key: key, model: model, maxTokens: 150)
     }
 
-    /// Translation of one message into the given language (name in English, e.g. "German").
-    static func translate(_ text: String, to language: String, key: String, model: String) async throws -> String {
-        try await complete(system: "You are a translator (Babel Fish). Translate the text into \(language). If it already is in \(language), repeat it unchanged. Output only the translation, no comments.", prompt: text, key: key, model: model, maxTokens: 700)
-    }
-
     /// One short line per chat for the messages that were missed.
     static func summarize(_ chats: String, key: String, model: String) async throws -> String {
         try await complete(system: "The user was away. Below are the unread iMessages per chat. Write one short line per chat in the form \"Name: what it is about\" (mention if something looks urgent or needs an answer). Use the language of the messages, plain text, no markdown.", prompt: chats, key: key, model: model, maxTokens: 700)
-    }
-    static var targetLanguage: String {
-        let code = Locale.preferredLanguages.first.flatMap { Locale(identifier: $0).language.languageCode?.identifier } ?? "en"
-        return Locale(identifier: "en").localizedString(forLanguageCode: code) ?? "English"
     }
 }

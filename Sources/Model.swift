@@ -58,7 +58,7 @@ struct MainOpts: Codable, Equatable {
     }
     enum K: String, CodingKey { case tabs, search, icqNow, services, btnInstructions, btnRandom, btnWeb, btnCool, showOffline, showIMessage, alwaysOnTop, mProfile, mToolbar, mButtons, mOffline, mIMessage, mOnTop }
 }
-struct Msg: Codable { var dir: String; var text: String; var t: Date }
+struct Msg: Codable { var dir: String; var text: String; var t: Date; var files: [String]? = nil }
 enum FreqMode: String, Codable { case hour, interval }
 
 let dummyMessages = [
@@ -148,6 +148,8 @@ final class Store: ObservableObject {
         }
     }
     var statusSince = Date()
+    var regen = Set<String>()
+    @Published var attachments: [String: [URL]] = [:]   // files / pictures waiting in the send window
     @Published var sounds = true
     @Published var contacts: [Contact] = []
     @Published var freqEnabled = true
@@ -235,8 +237,8 @@ final class Store: ObservableObject {
         contacts.append(c); online.insert(c.uin); save(); return c
     }
     func remove(_ uin: String) { contacts.removeAll { $0.uin == uin }; unread[uin] = nil; online.remove(uin); save() }
-    func log(_ uin: String, _ dir: String, _ text: String, _ t: Date = Date()) {
-        history[uin, default: []].append(Msg(dir: dir, text: text, t: t))
+    func log(_ uin: String, _ dir: String, _ text: String, _ t: Date = Date(), files: [String]? = nil) {
+        history[uin, default: []].append(Msg(dir: dir, text: text, t: t, files: files))
         if history[uin]!.count > 500 { history[uin]!.removeFirst() }
         save()
     }
@@ -288,14 +290,14 @@ final class Store: ObservableObject {
             if now >= windowEnd { planNow() }
         } else if now >= nextAt { deliver(); nextAt = now.addingTimeInterval(Double(minutes) * 60) }
     }
-    func deliver(to chosen: Contact? = nil, text: String? = nil) {
+    func deliver(to chosen: Contact? = nil, text: String? = nil, files: [String]? = nil) {
         if chosen == nil && quiet { return }                                  // scheduled sample message while Away / DND
         guard status != .offline, let c = chosen ?? contacts.filter({ online.contains($0.uin) && !$0.isLive && !(hideDemo && $0.isDemo) }).randomElement() else { return }
         var t = text ?? ""
         if text == nil { var i: Int; repeat { i = Int.random(in: 0..<dummyMessages.count) } while i == lastMsg; lastMsg = i; t = dummyMessages[i] }
-        let m = Msg(dir: "in", text: t, t: Date())
+        let m = Msg(dir: "in", text: t, t: Date(), files: files)
         unread[c.uin, default: []].append(m)
-        log(c.uin, "in", m.text, m.t)
+        log(c.uin, "in", m.text, m.t, files: files)
         Sound.event("message")
         NSApp.requestUserAttention(.informationalRequest)
         // like ICQ: no pop-up, the contact flashes an envelope until you open it (an already open session just keeps running)
@@ -317,6 +319,14 @@ final class Store: ObservableObject {
 
     /// The user just sent a message. Simulated contacts answer with a dummy line, but only while they are online;
     /// AI chatbots (always online) answer through the AI if enabled and keyed, otherwise with a dummy line.
+    /// Sends the waiting attachments of a contact: real iMessage contacts through Messages, everyone else just gets a log line.
+    func sendAttachments(_ uin: String) {
+        guard let files = attachments.removeValue(forKey: uin), !files.isEmpty else { return }
+        if let c = contact(uin), let h = c.bridge {
+            guard bridgeEnabled, status != .offline else { return }
+            for f in files { Bridge.sendFile(f, to: h) { err in DispatchQueue.main.async { if let err { notice("Messages could not send \(f.lastPathComponent):\n\(err)") } else { self.log(uin, "out", "", files: [f.path]) } } } }
+        } else { for f in files { log(uin, "out", "", files: [f.path]) } }
+    }
     func botReply(_ uin: String) {
         if let c = contact(uin), let h = c.bridge {       // a real iMessage contact: hand the message to Messages, never auto-answer
             guard bridgeEnabled else { notice("The Messages bridge is off.\nTurn it on in Preferences > Bridge."); return }
@@ -387,29 +397,18 @@ final class Store: ObservableObject {
                         contact = self.addBridgeContact(m.handle, handle: m.handle, importRecent: false)
                         if let c = contact { self.nameFromContacts(c) }
                     }
-                    if let c = contact { self.deliver(to: c, text: m.text); if !touched.contains(c) { touched.append(c) }; self.maybeAutoReply(c, m) }
+                    if let c = contact { self.deliver(to: c, text: m.text, files: m.files.isEmpty ? nil : m.files); if !touched.contains(c) { touched.append(c) }; self.maybeAutoReply(c, m) }
                 }
                 touched.forEach { self.prepareDraft(for: $0) }
             }
         }
     }
-    /// Babel Fish: translates a text on request (needs AI on) and hands the result to `done` on the main thread.
-    func babel(_ text: String, to lang: String, done: @escaping (String) -> Void) {
-        guard aiEnabled else { notice("Turn on AI Chat in Preferences first."); return }
-        let key = apiKey, model = apiModel
-        Task {
-            do { let t = try await AIChat.translate(text, to: lang, key: key, model: model); await MainActor.run { done(t) } }
-            catch { await MainActor.run { notice("Translation failed: \(error.localizedDescription)") } }
-        }
-    }
-    /// Menu of target languages for an outgoing text.
-    func babelMenu(_ text: String, done: @escaping (String) -> Void) {
-        popMenu(["English", "German", "French", "Spanish", "Italian"].map { l in MItem("Translate to " + l) { Store.shared.babel(text, to: l, done: done) } })
-    }
     /// AI reply draft for an iMessage contact (only if switched on in Preferences > AI Chat): stored as text for the reply window, never sent.
-    func prepareDraft(for c: Contact) {
-        guard aiEnabled, aiDraftIMessage, c.isLive, !drafting.contains(c.uin) else { return }
-        withEngine { self.prepareDraft(for: c) } run: {
+    func prepareDraft(for c: Contact, force: Bool = false) {
+        if force && !aiEnabled { notice("Turn on AI Chat in Preferences first."); return }
+        guard aiEnabled, force || (aiDraftIMessage && c.isLive), !drafting.contains(c.uin) else { return }
+        withEngine(retry: { self.prepareDraft(for: c, force: force) }) {
+        if force { regen.insert(c.uin) }   // the send window replaces its text with this draft
         drafting.insert(c.uin)
         let hist = history[c.uin] ?? [], key = apiKey, model = apiModel, me = nick
         Task {
@@ -548,6 +547,7 @@ enum Sound { // sound files of the active theme / built-in set
     static func event(_ e: String) { if isOn(e) { play(file(for: e)) } }
     static func play(_ name: String) {
         let s = Store.shared; guard s.sounds, s.status != .dnd else { return }
+        if hold[name] != nil, !Attach.typeSound { return }
         if let h = hold[name], let t = last[name], Date().timeIntervalSince(t) < h { return }
         last[name] = Date()
         if let f = Assets.resource("sounds", name + ".wav"), let snd = NSSound(contentsOfFile: f, byReference: false) { live.append(snd); snd.play(); if live.count > 12 { live.removeFirst() } }

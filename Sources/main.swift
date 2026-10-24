@@ -105,19 +105,45 @@ enum ICQ {
         let na = { comingSoon() }
         func st(_ x: Status) -> RMItem { RMItem(title: x.menuLabel, icon: x.rawValue, fn: { setStatus(x) }) }
         popRMenu([
-            RMItem(title: "Random Chat", icon: "random", children: ["Find Random User", "Available For Random Chat", "My Random Chat Settings", "Random Chat Web Guide"].map { RMItem(title: $0, fn: na) }),
+            RMItem(title: "Random Chat", icon: "random", children: ["Find Random User", "Available For Random Chat", "My Random Chat Settings"].map { RMItem(title: $0, fn: na) }),
             RMItem(title: "Online Status", header: true),
             st(.online), st(.ffc), RMItem(sep: true), st(.away), st(.na), RMItem(sep: true), st(.occupied), st(.dnd), RMItem(sep: true), st(.invisible), st(.offline),
         ])
+    }
+    static let defaultPage = "http://myretromac.app/"
+    static var myPage: String { UserDefaults.standard.string(forKey: "myPageURL") ?? defaultPage }
+    static func openURL(_ u: String) { if let url = URL(string: u) { NSWorkspace.shared.open(url) } }
+    static func openApp(_ name: String) { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/\(name).app")) }
+    /// Asks for one line of text in a themed window; empty or Cancel does nothing.
+    static var askHandler: ((String) -> Void)?
+    static func askText(_ title: String, _ label: String, _ initial: String = "", ok: @escaping (String) -> Void) {
+        askHandler = ok
+        WinMgr.shared.close("ask")
+        WinMgr.shared.open("ask", title, AskView.size.width, AskView.size.height) { AskView(label: label, text: initial) }
+    }
+    static func editMyPage() {
+        askText("Edit My ICQ Page", "Address of your own page (leave the default to use \(defaultPage)):", myPage) { u in
+            UserDefaults.standard.set(u == defaultPage ? nil : (u.contains("://") ? u : "https://" + u), forKey: "myPageURL")
+        }
+    }
+    /// New Reminders item / Notes note: the text is escaped and handed to AppleScript.
+    static func newEntry(_ title: String, _ label: String, script: @escaping (String) -> String) {
+        askText(title, label) { t in
+            let src = script(t.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))
+            DispatchQueue.global().async {
+                var err: NSDictionary?; NSAppleScript(source: src)?.executeAndReturnError(&err)
+                if let e = err { DispatchQueue.main.async { notice(((e[NSAppleScript.errorNumber] as? Int) == -1743) ? "Not allowed yet: enable ICQuel under Privacy & Security > Automation." : "Could not create the entry: \(e[NSAppleScript.errorMessage] as? String ?? "error")") } }
+            }
+        }
     }
     private static func na() { comingSoon() }
     private static func stub(_ titles: [String]) -> [RMItem] { titles.map { RMItem(title: $0, fn: na) } }
     /// The ICQ feature entries shared by the System Menu and the tray menu (icons matched from the original screenshot).
     static func icqEntries() -> [RMItem] {
-        [RMItem(title: "My ICQ Page", icon: "m_page", children: stub(["Go To My ICQ Page", "Edit My ICQ Page"])),
-         RMItem(title: "Reminder", icon: "m_reminder", children: stub(["Open Reminders List", "New Reminder"])),
+        [RMItem(title: "My ICQ Page", icon: "m_page", children: [RMItem(title: "Go To My ICQ Page", fn: { openURL(myPage) }), RMItem(title: "Edit My ICQ Page", fn: { editMyPage() })]),
+         RMItem(title: "Reminder", icon: "m_reminder", children: [RMItem(title: "Open Reminders List", fn: { openApp("Reminders") }), RMItem(title: "New Reminder", fn: { newEntry("New Reminder", "Remind me to:") { "tell application \"Reminders\" to make new reminder with properties {name:\"\($0)\"}" } })]),
          RMItem(title: "Notes", icon: "m_notes", children: stub(["New Note", "Open Notes"])),
-         RMItem(title: "ToDo", icon: "m_todo", children: stub(["New ToDo", "Open ToDo List"])),
+         RMItem(title: "ToDo", icon: "m_todo", children: [RMItem(title: "New ToDo", fn: { newEntry("New ToDo", "ToDo:") { "tell application \"Notes\" to make new note with properties {body:\"<div>☐ \($0)</div>\"}" } }), RMItem(title: "Open ToDo List", fn: { openApp("Notes") })]),
          RMItem(title: "Email", icon: "m_email", children: stub(["Send Email", "Send Email + Notify By ICQ", "Check Email", "Email Signature", "Email Center"])),
          RMItem(title: "Phone - \"Follow Me\"", icon: "m_phone", children: stub(["Send Phone Call Request", "Find Phone# and Dial", "Update Phone \"Follow Me\" info"])),
          RMItem(title: "Message Archive", icon: "m_archive", children: [RMItem(title: "Open Message Archive", fn: { openArchive() })]),
@@ -172,8 +198,8 @@ enum ICQ {
         func list(_ t: [String]) -> [NSMenuItem] { t.map { $0 == "-" ? .separator() : MItem($0, fn: na) } }
         popMenu([
             submenu("Email", list(["Send Email", "Send Email + Notify By ICQ", "-", "Check Email", "Email Signature", "Email Center"])),
-            submenu("Phone", list(["Send Phone Call Request", "Find Phone# and Dial", "Web Guide"])),
-            submenu("Random", list(["Find Random User", "-", "Available For Random Chat", "My Random Chat Settings", "-", "Random Chat Web Guide"])),
+            submenu("Phone", list(["Send Phone Call Request", "Find Phone# and Dial"])),
+            submenu("Random", list(["Find Random User", "-", "Available For Random Chat", "My Random Chat Settings"])),
             MItem("Message Archive") { openArchive() },
         ])
     }

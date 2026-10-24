@@ -39,7 +39,7 @@ enum Bridge {
         return sqlite3_column_int64(st, 0)
     }
 
-    struct Incoming { var rowid: Int64; var handle: String; var text: String; var date: Date; var imessage: Bool; var group: Bool }
+    struct Incoming { var rowid: Int64; var handle: String; var text: String; var date: Date; var imessage: Bool; var group: Bool; var files: [String] = [] }
     /// Incoming (not from me) messages with an id above `after`; reactions are skipped.
     static func incoming(after: Int64) -> [Incoming] {
         guard let db = open() else { return [] }
@@ -55,15 +55,25 @@ enum Bridge {
         var out: [Incoming] = []
         while sqlite3_step(st) == SQLITE_ROW {
             let id = sqlite3_column_int64(st, 0)
-            let text = messageText(st, 1, 2)
+            let files = attachmentFiles(db, id)
+            var text = messageText(st, 1, 2); if !files.isEmpty, text == "[Attachment]" { text = "" }
             let date = Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 3)) / 1_000_000_000)
             let handle = sqlite3_column_text(st, 4).map { String(cString: $0) } ?? ""
             let service = sqlite3_column_text(st, 5).map { String(cString: $0) } ?? ""
-            out.append(Incoming(rowid: id, handle: handle, text: text, date: date, imessage: service == "iMessage", group: sqlite3_column_int(st, 6) != 0))
+            out.append(Incoming(rowid: id, handle: handle, text: text, date: date, imessage: service == "iMessage", group: sqlite3_column_int(st, 6) != 0, files: files))
         }
         return out
     }
 
+    /// Files attached to a message (needs the same Full Disk Access as chat.db).
+    private static func attachmentFiles(_ db: OpaquePointer?, _ rowid: Int64) -> [String] {
+        var st: OpaquePointer?; defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, "SELECT a.filename FROM message_attachment_join j JOIN attachment a ON a.ROWID = j.attachment_id WHERE j.message_id = ?1 ORDER BY a.ROWID", -1, &st, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_int64(st, 1, rowid)
+        var out: [String] = []
+        while sqlite3_step(st) == SQLITE_ROW { if let p = sqlite3_column_text(st, 0) { out.append((String(cString: p) as NSString).expandingTildeInPath) } }
+        return out
+    }
     /// Newer macOS versions keep the text only inside the `attributedBody` typedstream: "NSString" ... 0x2B <length> <utf8>.
     /// Text of a message row: the `text` column, else the typedstream in `attributedBody`; "[Attachment]" when only an object is left.
     private static func messageText(_ st: OpaquePointer?, _ textCol: Int32, _ bodyCol: Int32) -> String {
@@ -186,6 +196,18 @@ enum Bridge {
             send (\(body)) to targetBuddy
         end tell
         """
+    }
+    /// Sends a file (picture, GIF, document) through Messages.app.
+    static func sendFile(_ file: URL, to handle: String, done: @escaping (String?) -> Void) {
+        DispatchQueue.main.async {
+            func run(_ participant: Bool) -> String? {
+                var err: NSDictionary?
+                let src = "tell application \"Messages\"\nset targetService to 1st service whose service type = iMessage\nset targetBuddy to \(participant ? "participant" : "buddy") \(lit(handle)) of targetService\nsend POSIX file \(lit(file.path)) to targetBuddy\nend tell"
+                NSAppleScript(source: src)?.executeAndReturnError(&err)
+                return err.map { ($0[NSAppleScript.errorMessage] as? String) ?? "AppleScript error \($0[NSAppleScript.errorNumber] ?? "")" }
+            }
+            done(run(true).flatMap { _ in run(false) })
+        }
     }
     /// Sends through Messages.app. `done` gets an error text or nil.
     static func send(_ text: String, to handle: String, done: @escaping (String?) -> Void) {

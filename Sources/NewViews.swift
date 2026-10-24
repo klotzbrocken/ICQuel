@@ -75,6 +75,14 @@ private func lbl(_ t: String, _ r: R, bold: Bool = false) -> some View { Text(t)
 private func val(_ t: String, _ r: R) -> some View {
     Text(t).font(rf()).foregroundColor(.black).lineLimit(1).frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.gray98).overlay(Bevel(raised: false)).at(r)
 }
+/// Speaker icon: switches the typing sounds of the message windows on/off (a red slash shows "off").
+private struct SoundBtn: View {
+    @Binding var muted: Bool
+    var body: some View {
+        IconBtn(name: "tool_0") { muted.toggle(); Attach.typeSound = !muted }
+            .overlay(Group { if muted { Path { $0.move(to: CGPoint(x: 3, y: 17)); $0.addLine(to: CGPoint(x: 17, y: 3)) }.stroke(Color.red, lineWidth: 2).allowsHitTesting(false) } })
+    }
+}
 private struct IconBtn: View {
     let name: String; var w: CGFloat = 20; var h: CGFloat = 20; let action: () -> Void
     var body: some View { Button(action: action) { Pix(name: name, w: 16).frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.gray98) }.buttonStyle(PlainPush(isDefault: false)).frame(width: w, height: h) }
@@ -98,6 +106,8 @@ struct SendView: View {
     let uin: String
     @ObservedObject var s = Store.shared
     @State private var text: String
+    @State private var muted = !Attach.typeSound
+    @State private var sz = Attach.sizeIndex
     init(uin: String) { self.uin = uin; _text = State(initialValue: Store.shared.aiDrafts[uin] ?? "") }   // an AI draft (never sent by the app) is put into the edit box
     static let size = CGSize(width: 334, height: 173)
     var body: some View {
@@ -115,23 +125,25 @@ struct SendView: View {
                     lbl("EMail:", R(212, 20, 36, 14), bold: true); val(c.mailAddr ?? "", R(248, 17, max(30, W - 248 - 30), 18))
                 }
                 IconBtn(name: "m_email", w: 20, h: 22) { ICQ.mail(c) }.offset(x: W - 24, y: 15)
-                lbl(Store.shared.aiDrafts[uin] != nil ? "AI draft:" : "Enter Message:", R(4, 52, 90, 14)); lbl("Chars:", R(100, 52, 34, 14)); val(String(text.count), R(134, 49, 30, 18))
-                IconBtn(name: "tool_0") {}.offset(x: 170, y: 48)
-                IconBtn(name: "tool_3") {}.offset(x: 196, y: 48)
-                IconBtn(name: "tool_4") {}.offset(x: 218, y: 48)
-                IconBtn(name: "tool_5") {}.offset(x: 240, y: 48)
+                lbl(!(s.attachments[uin] ?? []).isEmpty ? "📎 \(s.attachments[uin]!.count) attached" : (s.aiDrafts[uin] != nil ? "AI draft:" : "Enter Message:"), R(4, 52, 94, 14)); lbl("Chars:", R(100, 52, 34, 14)); val(String(text.count), R(134, 49, 30, 18))
+                SoundBtn(muted: $muted).offset(x: 170, y: 48)
+                IconBtn(name: "tool_3") { sz = (sz + 1) % 3; Attach.sizeIndex = sz }.offset(x: 196, y: 48)
+                IconBtn(name: "tool_4") { popMenu([":-)", ":-D", ";-)", ":-(", ":-P", ":-O", ":-/", "8-)", "<3"].map { e in MItem(e) { text += (text.isEmpty || text.hasSuffix(" ") ? "" : " ") + e } }) }.offset(x: 218, y: 48)
+                IconBtn(name: "tool_5") { comingSoon() }.offset(x: 240, y: 48)
                 PushBtn(label: "History") { ICQ.openArchive(uin) }.at(R(W - 60, 48, 58, 21))
-                REdit(text: $text, multiline: true).at(R(2, 72, W - 4, max(40, H - 72 - 28)))
-                Button { comingSoon() } label: { Pix(name: "more").frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.gray98) }.buttonStyle(PlainPush(isDefault: false)).at(R(2, H - 24, 52, 22))
-                if Store.shared.aiEnabled { PushBtn(label: "Babel Fish") { Store.shared.babelMenu(text) { text = $0 } }.at(R(58, H - 24, 76, 22)) }
+                REdit(text: $text, multiline: true, size: Attach.sizes[sz]).at(R(2, 72, W - 4, max(40, H - 72 - 28)))
+                Button { popMenu(Attach.moreItems(uin)) } label: { Pix(name: "more").frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.gray98) }.buttonStyle(PlainPush(isDefault: false)).at(R(2, H - 24, 52, 22))
                 PushBtn(label: "Cancel", isCancel: true) { WinMgr.shared.close("send" + uin) }.at(R(W - 146, H - 24, 70, 22))
                 PushBtn(label: "Send", isDefault: true) {
-                    let v = text.trimmingCharacters(in: .whitespacesAndNewlines); guard !v.isEmpty else { return }
-                    Store.shared.log(uin, "out", v); Sound.play("msgsent"); WinMgr.shared.close("send" + uin); Store.shared.botReply(uin); Store.shared.aiDrafts[uin] = nil
+                    let v = text.trimmingCharacters(in: .whitespacesAndNewlines), files = !(Store.shared.attachments[uin] ?? []).isEmpty; guard !v.isEmpty || files else { return }
+                    if !v.isEmpty { Store.shared.log(uin, "out", v) }
+                    Sound.play("msgsent"); WinMgr.shared.close("send" + uin)
+                    if !v.isEmpty { Store.shared.botReply(uin) }
+                    Store.shared.sendAttachments(uin); Store.shared.aiDrafts[uin] = nil
                 }.keyboardShortcut(.return, modifiers: .command).at(R(W - 72, H - 24, 70, 22))
             }.frame(width: W, height: H, alignment: .topLeading).offset(y: 3)
         }
-        .onChange(of: s.aiDrafts[uin]) { if let d = $0, text.isEmpty { text = d } }   // the draft arrived after the window was opened
+        .onChange(of: s.aiDrafts[uin]) { if let d = $0, text.isEmpty || Store.shared.regen.remove(uin) != nil { text = d } }   // the draft arrived after the window was opened
         .onChange(of: text) { [text] new in
             if new.count > 450 { self.text = String(new.prefix(450)); return }
             Sound.play(new.count >= text.count ? "msgtype" : "msgback")
@@ -141,7 +153,8 @@ struct SendView: View {
 struct IncomingView: View {
     let uin: String; @ObservedObject var s = Store.shared
     @State private var textH: CGFloat = 0
-    @State private var translated: String?
+    @State private var muted = !Attach.typeSound
+    @State private var sz = Attach.sizeIndex
     /// Messages being read in this window: they count as read as soon as the window takes them over (the envelope stops flashing).
     @State private var queue: [Msg]
     init(uin: String) { self.uin = uin; _queue = State(initialValue: Store.shared.unread[uin] ?? []) }
@@ -166,14 +179,19 @@ struct IncomingView: View {
                     lbl("Date:", R(130, 42, 30, 14), bold: true); val(m.map { msgDate($0.t) } ?? "", R(162, 38, 56, 18))
                     lbl("Time:", R(224, 42, 30, 14), bold: true); val(m.map { msgTime($0.t) } ?? "", R(256, 38, 50, 18))
                 }
-                lbl(s.aiDrafts[uin] != nil ? "Message  ·  AI draft ready: press Reply" : (s.drafting.contains(uin) ? "Message  ·  AI is preparing a reply…" : "Message"), R(6, 72, 200, 14))
-                IconBtn(name: "tool_5") {}.offset(x: W - 102, y: 70)
+                lbl(s.aiDrafts[uin] != nil ? "Message  ·  AI draft ready" : (s.drafting.contains(uin) ? "Message  ·  AI is thinking…" : "Message"), R(6, 72, 160, 14))
+                SoundBtn(muted: $muted).offset(x: W - 156, y: 70)
+                IconBtn(name: "tool_3") { sz = (sz + 1) % 3; Attach.sizeIndex = sz }.offset(x: W - 130, y: 70)
+                IconBtn(name: "tool_5") { comingSoon() }.offset(x: W - 102, y: 70)
                 PushBtn(label: "History") { ICQ.openArchive(uin) }.at(R(W - 76, 70, 72, 20))
                 let needsBar = textH > mh - 4
                 ZStack(alignment: .topLeading) {
                     Color.white
                     ScrollView(showsIndicators: false) {
-                        Text(translated ?? m?.text ?? "").font(rf()).foregroundColor(.black).textSelection(.enabled).frame(width: max(40, W - 4 - (needsBar ? 17 : 0) - 14), alignment: .topLeading).padding(5)
+                        VStack(alignment: .leading, spacing: 6) {
+                            if !(m?.text ?? "").isEmpty { Text(m?.text ?? "").font(rf(Attach.sizes[sz])).foregroundColor(.black).textSelection(.enabled) }
+                            if let f = m?.files, !f.isEmpty { AttachList(files: f, maxW: W - 40).font(rf(Attach.sizes[sz])).foregroundColor(.black) }
+                        }.frame(width: max(40, W - 4 - (needsBar ? 17 : 0) - 14), alignment: .topLeading).padding(5)
                             .background(GeometryReader { t in Color.clear.onAppear { textH = t.size.height }.onChange(of: t.size.height) { textH = $0 } })
                     }.frame(width: W - 4 - (needsBar ? 17 : 0), height: mh)
                     if needsBar { VScrollBar(h: mh).offset(x: W - 4 - 17, y: 0) }   // scroll bar only when the text does not fit
@@ -182,7 +200,7 @@ struct IncomingView: View {
                 PushBtn(label: "Reply", isDefault: true) { pop(); WinMgr.shared.close(id); ICQ.openSend(uin) }.at(R(8, H - 52, 66, 21))
                 PushBtn(label: "Forward") { comingSoon() }.at(R(80, H - 52, 66, 21))
                 PushBtn(label: "Request Chat") { comingSoon() }.at(R(W - 102, H - 52, 94, 21))
-                PushBtn(label: "More Functions") { popMenu([MItem("Message Archive") { ICQ.openArchive(uin) }, MItem("History") { ICQ.openArchive(uin) }, MItem(translated == nil ? "Translate (Babel Fish)" : "Show Original", enabled: s.aiEnabled) { if translated != nil { translated = nil } else if let t = m?.text { Store.shared.babel(t, to: AIChat.targetLanguage) { translated = $0 } } }]) }.at(R(2, H - 24, 104, 22))
+                PushBtn(label: "More Functions") { popMenu(Attach.moreItems(uin, openSend: true) + [NSMenuItem.separator(), MItem("Message Archive") { ICQ.openArchive(uin) }]) }.at(R(2, H - 24, 104, 22))
                 PushBtn(label: "Close", isCancel: true) { pop(); WinMgr.shared.close(id) }.at(R(W - 146, H - 24, 64, 22))
                 PushBtn(label: "Read Next") { pop(); WinMgr.shared.setTitle(id, IncomingView.title(max(0, q.count - 1))) }.disabled(q.count < 2).at(R(W - 78, H - 24, 76, 22))
             }.frame(width: W, height: H, alignment: .topLeading).offset(y: 3)

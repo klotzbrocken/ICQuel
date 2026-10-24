@@ -6,7 +6,7 @@ APP=${APP_OUT:-ICQuel.app}   # APP_OUT: other output path (tools/screenshots.sh)
 rm -rf $APP; mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 source ./update.conf; source ./VERSION
 for ARCH in arm64 x86_64; do   # universal binary
-    swiftc -O -swift-version 5 ${DEBUG_BUILD:+-DDEBUG} -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts -Xlinker -weak_framework -Xlinker FoundationModels \
+    swiftc -O -swift-version 5 ${DEBUG_BUILD:+-DDEBUG} -target $ARCH-apple-macos13.0 Sources/*.swift -o /tmp/icquel-$ARCH -framework SwiftUI -framework AppKit -framework Contacts -framework PhotosUI -Xlinker -weak_framework -Xlinker FoundationModels \
         -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
 lipo -create /tmp/icquel-arm64 /tmp/icquel-x86_64 -output $APP/Contents/MacOS/ICQuel
@@ -16,7 +16,7 @@ cp -R assets-own/sounds $APP/Contents/Resources/sounds
 cp Vendor/Sparkle/LICENSE $APP/Contents/Resources/Sparkle-LICENSE.txt   # MIT licence of the bundled Sparkle framework
 cp assets-own/icon.png $APP/Contents/Resources/icon.png   # shown as the Dock icon (large, cut out)
 # app icon (own artwork, tools/gen_assets.py)
-python3 - <<'E'
+/usr/bin/python3 - <<'E'
 from PIL import Image
 import os
 os.makedirs('/tmp/icquel.iconset',exist_ok=True)
@@ -37,6 +37,7 @@ cat > $APP/Contents/Info.plist <<'E'
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>__SHORT__</string>
+<key>GiphyKey</key><string>__GIPHY__</string>
 <key>CFBundleVersion</key><string>__BUILD__</string>
 <key>SUFeedURL</key><string>https://github.com/__REPO__/releases/latest/download/appcast.xml</string>
 <key>SUPublicEDKey</key><string>__KEY__</string>
@@ -45,12 +46,12 @@ cat > $APP/Contents/Info.plist <<'E'
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSContactsUsageDescription</key><string>Used only by the optional Messages bridge to show the names of your iMessage contacts.</string>
-<key>NSAppleEventsUsageDescription</key><string>Used only by the optional Messages bridge to send messages through the Messages app.</string>
+<key>NSAppleEventsUsageDescription</key><string>Used to send messages through Messages (optional bridge) and to create items in Reminders and Notes when you choose New Reminder or New ToDo.</string>
 <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>ICQuel status</string><key>CFBundleURLSchemes</key><array><string>icquel</string></array></dict></array>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 E
-sed -i '' "s|__SHORT__|$SHORT|; s|__BUILD__|$BUILD|; s|__REPO__|$GITHUB_REPO|; s|__KEY__|$SU_PUBLIC_KEY|" $APP/Contents/Info.plist
+sed -i '' "s|__SHORT__|$SHORT|; s|__BUILD__|$BUILD|; s|__REPO__|$GITHUB_REPO|; s|__KEY__|$SU_PUBLIC_KEY|; s|__GIPHY__|$(cat giphy.key 2>/dev/null)|" $APP/Contents/Info.plist
 if [[ -n "$SIGN_ID" ]]; then   # Developer ID + hardened runtime (needed for notarisation; privacy grants then survive updates)
     F=$APP/Contents/Frameworks/Sparkle.framework/Versions/B
     for x in $F/XPCServices/*.xpc $F/Autoupdate $F/Updater.app; do [[ -e $x ]] && codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$x"; done

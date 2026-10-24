@@ -59,12 +59,12 @@ struct PlainPush: ButtonStyle {
     }
 }
 struct REdit: View {
-    @Binding var text: String; var secure = false; var multiline = false
+    @Binding var text: String; var secure = false; var multiline = false; var size: CGFloat = 10.5
     var body: some View {
         Group {
             if multiline { TextEditor(text: $text).scrollContentBackground(.hidden) }
             else if secure { SecureField("", text: $text).frame(maxHeight: .infinity) } else { TextField("", text: $text).frame(maxHeight: .infinity) }
-        }.textFieldStyle(.plain).font(rf()).foregroundColor(.black).padding(.horizontal, multiline ? 5 : 5).padding(.vertical, multiline ? 4 : 0)
+        }.textFieldStyle(.plain).font(rf(size)).foregroundColor(.black).padding(.horizontal, multiline ? 5 : 5).padding(.vertical, multiline ? 4 : 0)
             .background(Color.white).overlay(Bevel(raised: false))
     }
 }

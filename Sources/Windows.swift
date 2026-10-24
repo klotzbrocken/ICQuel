@@ -15,7 +15,7 @@ struct HistoryText: View {
                 ScrollView { VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array((s.history[uin] ?? []).suffix(30).enumerated()), id: \.offset) { _, m in
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("\(m.dir == "in" ? name : s.nick) (\(stamp(m.t))):").font(rf(bold: true)); Text(m.text)
+                            Text("\(m.dir == "in" ? name : s.nick) (\(stamp(m.t))):").font(rf(bold: true)); if !m.text.isEmpty { Text(m.text) }; if let f = m.files, !f.isEmpty { AttachList(files: f, maxW: 200) }
                         }
                     }
                     Color.clear.frame(height: 1).id("end")
@@ -289,6 +289,7 @@ struct PrefsView: View {
                 }
                 RGroup(title: "Contact list") {
                     RCheck(title: "Show offline contacts", on: $opts.showOffline)
+                    RCheck(title: "Hide demo contacts (the made-up sample friends)", on: Binding(get: { s.hideDemo }, set: { s.hideDemo = $0; s.save() }))
                     RCheck(title: "Show the iMessage group", on: $opts.showIMessage)
                     RCheck(title: "Show \"Instructions\"", on: $opts.btnInstructions)
                     RCheck(title: "Show \"Find Random Chat Partner\"", on: $opts.btnRandom)
@@ -304,6 +305,7 @@ struct PrefsView: View {
                 }
                 RGroup(title: "Contact list") {
                     RCheck(title: "Show offline contacts", on: $opts.mOffline)
+                    RCheck(title: "Hide demo contacts (the made-up sample friends)", on: Binding(get: { s.hideDemo }, set: { s.hideDemo = $0; s.save() }))
                     RCheck(title: "Show the iMessage group", on: $opts.mIMessage)
                 }.padding(.top, 6)
             }

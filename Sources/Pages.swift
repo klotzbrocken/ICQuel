@@ -268,3 +268,26 @@ struct MessagesImportView: View {
         }.padding(14).frame(width: MessagesImportView.size.width, height: MessagesImportView.size.height, alignment: .topLeading).onAppear { m.load() }
     }
 }
+
+/// One-line text prompt in the look of the active theme (used by ICQ.askText).
+struct AskView: View {
+    let label: String
+    @State var text: String
+    static let size = CGSize(width: 340, height: 130)
+    private func done(_ go: Bool) {
+        let v = text.trimmingCharacters(in: .whitespaces), h = ICQ.askHandler
+        ICQ.askHandler = nil; WinMgr.shared.close("ask")
+        if go, !v.isEmpty { h?(v) }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label).fixedSize(horizontal: false, vertical: true)
+            RField(text: $text)
+            Spacer(minLength: 0)
+            HStack { Spacer()
+                RButton(title: "Cancel") { done(false) }
+                RButton(title: "OK", isDefault: true) { done(true) }
+            }
+        }.padding(14).frame(width: AskView.size.width, height: AskView.size.height, alignment: .topLeading)
+    }
+}
