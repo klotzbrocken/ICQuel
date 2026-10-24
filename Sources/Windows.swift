@@ -36,18 +36,30 @@ struct ContactHeader: View {
         }
     }
 }
+/// The Message Archive lists its contacts by service.
+enum Archive {
+    static func sections(_ contacts: [Contact]) -> [(title: String, contacts: [Contact])] {
+        let byName: ([Contact]) -> [Contact] = { $0.sorted { $0.name.lowercased() < $1.name.lowercased() } }
+        let groups: [(String, (Contact) -> Bool)] = [("iMessage", { $0.isIM }), ("WhatsApp", { $0.isWA }), ("AI chatbots", { $0.isBot }), ("ICQ", { !$0.isLive && !$0.isBot })]
+        return groups.compactMap { t, f in let l = byName(contacts.filter(f)); return l.isEmpty ? nil : (t, l) }
+    }
+}
 struct ArchiveView: View {
     @State var cur: String?; @ObservedObject var s = Store.shared
     var body: some View {
         VStack(spacing: 6) {
             HStack(spacing: 6) {
                 Sunken { ScrollView { VStack(spacing: 0) {
-                    ForEach(s.contacts) { c in
-                        Text(c.name).lineLimit(1).foregroundColor(cur == c.uin ? .white : Color.ink).padding(.horizontal, 4)
-                            .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading).background(cur == c.uin ? Color.navy : Color.clear)
-                            .contentShape(Rectangle()).onTapGesture { cur = c.uin }
+                    ForEach(Archive.sections(s.contacts), id: \.title) { sec in
+                        Text(sec.title).font(rf(10, bold: true)).foregroundColor(.hint).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4).padding(.top, 4)
+                            .overlay(Rectangle().fill(Color.gray.opacity(0.5)).frame(height: 1), alignment: .bottom)
+                        ForEach(sec.contacts) { c in
+                            Text(c.name).lineLimit(1).foregroundColor(cur == c.uin ? .white : Color.ink).padding(.horizontal, 4)
+                                .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading).background(cur == c.uin ? Color.navy : Color.clear)
+                                .contentShape(Rectangle()).onTapGesture { cur = c.uin }
+                        }
                     }
-                }.frame(maxWidth: .infinity, alignment: .topLeading) } }.frame(width: 140)
+                }.frame(maxWidth: .infinity, alignment: .topLeading) } }.frame(width: 150)
                 if let cur, s.contact(cur) != nil {
                     if (s.history[cur] ?? []).isEmpty { Sunken { Text("No messages.").padding(4).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading) } }
                     else { HistoryText(uin: cur) }
@@ -338,6 +350,7 @@ struct PrefsView: View {
                     RCheck(title: "Also add new WhatsApp senders automatically (1:1 chats only)", on: Binding(get: { s.waAutoAdd }, set: { s.waAutoAdd = $0; s.save() })).padding(.top, 2)
                     note("Off: only chats you import are shown, everything else is dropped. Messages from imported chats arrive by themselves while ICQuel is running; you do not import again.")
                 }
+                if s.waEnabled, !wa.ignored.isEmpty { note("Last message from a chat that is not in your list: \(wa.ignored). Use \u{201C}Import chats…\u{201D} to add it, or switch on the automatic adding above.") }
                 if s.waEnabled { Text("Status: " + wa.statusText).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
                 if let q = wa.qr { Image(nsImage: q).interpolation(.none).resizable().frame(width: 190, height: 190).padding(.vertical, 4) }
                 if s.waEnabled {

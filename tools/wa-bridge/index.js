@@ -90,6 +90,17 @@ async function main(dataDir) {
     if (msg.pushName && !msg.key.fromMe && !jid.endsWith('@g.us')) { names.set(jid, msg.pushName); if (!chats.get(jid).name) chats.get(jid).name = msg.pushName; }
   }
 
+  // WhatsApp addresses many chats by a "LID" (…@lid) instead of the phone number. Report the phone-number form as `jid` and the other as `alt`,
+  // so the app can match a chat whichever form it saved.
+  async function pnFor(jid, alt) {
+    if (!jid || !jid.endsWith('@lid')) return null;
+    if (alt && alt.endsWith('@s.whatsapp.net')) return alt.replace(/:\d+@/, '@');
+    try {
+      const lm = sock && sock.signalRepository && sock.signalRepository.lidMapping;
+      const pn = lm && lm.getPNForLID ? await lm.getPNForLID(jid) : null;
+      return pn ? String(pn).replace(/:\d+@/, '@') : null;
+    } catch (e) { return null; }
+  }
   async function handleMessage(msg) {
     const key = msg.key || {};
     const jid = key.remoteJid;
@@ -111,8 +122,9 @@ async function main(dataDir) {
       } catch (e) { log('media download failed', e && e.message); }
     }
     const group = jid.endsWith('@g.us');
+    const pn = await pnFor(jid, key.remoteJidAlt);
     emit({
-      type: 'message', id: key.id || '', jid, from: key.fromMe ? (sock.user && sock.user.id) || '' : (key.participant || jid),
+      type: 'message', id: key.id || '', jid: pn || jid, alt: pn ? jid : (key.remoteJidAlt || ''), from: key.fromMe ? (sock.user && sock.user.id) || '' : (key.participant || jid),
       name: msg.pushName || names.get(jid) || '', text: textOf(m), group, ts: toNum(msg.messageTimestamp) || Math.floor(Date.now() / 1000),
       fromMe: !!key.fromMe, files,
     });

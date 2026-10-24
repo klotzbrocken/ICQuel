@@ -574,9 +574,10 @@ final class Store: ObservableObject {
     /// A message from the WhatsApp helper: only chats you imported are shown; everything else is dropped.
     func waIncoming(_ m: WAMessage) {
         guard waEnabled else { return }
-        var found = contacts.first(where: { $0.bridge == "wa:" + m.jid })
+        // a chat may have been saved under its phone-number form or its LID form: either matches
+        var found = contacts.first(where: { $0.bridge == "wa:" + m.jid || (!m.alt.isEmpty && $0.bridge == "wa:" + m.alt) })
         if found == nil, waAutoAdd, !m.group, !m.fromMe, m.jid.hasSuffix("@s.whatsapp.net") { found = addWAContact(m.name.isEmpty ? WAProtocol.number(m.jid) : m.name, jid: m.jid) }
-        guard let c = found else { return }
+        guard let c = found else { WABridge.shared.ignored = (m.name.isEmpty ? WAProtocol.number(m.jid) : m.name) + (m.group ? " (group)" : ""); return }
         if m.fromMe {   // written on another device: only the history gets it (our own sends are logged when they are made)
             if history[c.uin]?.last(where: { $0.dir == "out" }).map({ $0.text == m.text && Date().timeIntervalSince($0.t) < 60 }) == true { return }
             log(c.uin, "out", m.text, m.date, files: m.files.isEmpty ? nil : m.files); return

@@ -6,7 +6,7 @@ import ImageIO
 
 // MARK: protocol with the helper process (tools/wa-bridge): one JSON object per line on stdin / stdout
 struct WAChat { var jid: String; var name: String; var group: Bool; var last: String; var date: Date }
-struct WAMessage { var id: String; var jid: String; var from: String; var name: String; var text: String; var group: Bool; var date: Date; var fromMe: Bool; var files: [String] }
+struct WAMessage { var id: String; var jid: String; var alt: String = ""; var from: String; var name: String; var text: String; var group: Bool; var date: Date; var fromMe: Bool; var files: [String] }
 enum WAEvent {
     case qr(String), ready(String), closed(reason: String, loggedOut: Bool), message(WAMessage), chats([WAChat]), sent(id: String, ok: Bool, error: String)
 }
@@ -22,7 +22,7 @@ enum WAProtocol {
         case "sent": return .sent(id: s("id"), ok: j["ok"] as? Bool ?? false, error: s("error"))
         case "message":
             guard !s("jid").isEmpty else { return nil }
-            return .message(WAMessage(id: s("id"), jid: s("jid"), from: s("from"), name: s("name"), text: s("text"), group: j["group"] as? Bool ?? false,
+            return .message(WAMessage(id: s("id"), jid: s("jid"), alt: s("alt"), from: s("from"), name: s("name"), text: s("text"), group: j["group"] as? Bool ?? false,
                                       date: Date(timeIntervalSince1970: (j["ts"] as? Double) ?? Date().timeIntervalSince1970), fromMe: j["fromMe"] as? Bool ?? false, files: j["files"] as? [String] ?? []))
         case "chats":
             return .chats(((j["chats"] as? [[String: Any]]) ?? []).compactMap { c in
@@ -43,6 +43,7 @@ final class WABridge: ObservableObject {
     enum State: Equatable { case off, needsNode, downloading, starting, waitingForScan, ready, failed(String) }
     @Published var state = State.off
     @Published var qr: NSImage?
+    @Published var ignored = ""           // the last chat that sent a message but is not in the list (so you can see why nothing arrived)
     var statusText: String {
         switch state {
         case .off: return "Off"

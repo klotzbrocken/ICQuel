@@ -143,6 +143,10 @@ enum SelfTest {
         check(b.isGroup && b.callTarget == nil && b.mailAddr == nil && !c.isGroup && c.callTarget == "+491511234567", "groups have no FaceTime/mail target")
         check((try? JSONDecoder().decode(Contact.self, from: JSONEncoder().encode(a)))?.notes == "met at the LAN party", "contact notes survive saving")
         check(ICQ.randoms.count >= 6 && Set(ICQ.randoms.map(\.0)).count == ICQ.randoms.count && ICQ.randoms.allSatisfy { Presets.get($0.1) != nil }, "random chat personas are unique and use real presets")
+        let w = Contact(name: "Zoe", uin: "4", bridge: "wa:1@s.whatsapp.net"), bot = Contact(name: "Pixel", uin: "5", persona: "x"), ic = Contact(name: "Anna", uin: "6")
+        let secs = Archive.sections([w, bot, ic, c, b])
+        check(secs.map(\.title) == ["iMessage", "WhatsApp", "AI chatbots", "ICQ"] && secs[0].contacts.map(\.name) == ["Ben", "Team"] && secs[3].contacts.map(\.name) == ["Anna"], "archive is grouped by service: \(secs.map(\.title))")
+        check(Archive.sections([ic]).map(\.title) == ["ICQ"], "empty services are left out")
         let st = Store.shared
         check(st.awayText(.away) == Store.defaultAway["away"], "default away message")
         st.awayTexts["away"] = "Back at 5"; check(st.awayText(.away) == "Back at 5", "own away message wins"); st.awayTexts["away"] = nil
@@ -172,7 +176,14 @@ enum SelfTest {
         check(st.history["wa1"]?.last?.text == "hello" && st.history["wa1"]?.last?.dir == "in" && st.unread["wa1"]?.count == 1, "WhatsApp message lands in its chat")
         st.waIncoming(msg("123@g.us", "party?", group: true, name: "Bob"))
         check(st.history["wa2"]?.last?.text == "Bob: party?", "group message gets the sender name")
+        var lid = msg("49151234@s.whatsapp.net", "via lid"); lid.alt = "98765@lid"
+        let lidContact = Contact(name: "Lid", uin: "wa3", bridge: "wa:98765@lid"); st.contacts.append(lidContact)
+        st.waIncoming(lid)
+        check(st.history["wa3"]?.last?.text == "via lid" || st.history["wa1"]?.last?.text == "via lid", "a chat saved under its LID still matches a message that carries both forms")
+        if case .message(let lm)? = WAProtocol.parse(#"{"type":"message","id":"L1","jid":"49151234@s.whatsapp.net","alt":"98765@lid","from":"x","text":"t","ts":1}"#) { check(lm.alt == "98765@lid", "alt form is parsed") } else { check(false, "lid message parsed") }
+        st.contacts.removeAll { $0.uin == "wa3" }; st.history["wa3"] = nil; st.unread["wa3"] = nil
         st.waIncoming(msg("999@s.whatsapp.net", "stranger"))
+        check(WABridge.shared.ignored.contains("999") || WABridge.shared.ignored.contains("+999"), "dropped chat is reported in the status: \(WABridge.shared.ignored)")
         check(st.history.values.allSatisfy { $0.allSatisfy { $0.text != "stranger" } }, "chats that were not imported are ignored")
         st.log("wa1", "out", "on my way"); let n = st.history["wa1"]!.count
         st.waIncoming(msg("49151234@s.whatsapp.net", "on my way", fromMe: true))
