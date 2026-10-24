@@ -4,13 +4,17 @@
 cd "$(dirname "$0")/.."
 DEBUG_BUILD=1 APP_OUT=/tmp/icquel-qa.app ./build.sh 2>&1 | grep -E "error:" && { echo "build failed"; exit 1; }
 rm -rf /tmp/icquel-qa; fail=0
+caffeinate -d -t 1200 & cafe=$!   # a sleeping display renders blank pictures
 for t in classic modern aqua platinum; do
   mkdir -p /tmp/icquel-qa/$t
-  ICQ_THEME=$t ICQ_SNAPSHOT=/tmp/icquel-qa/$t /tmp/icquel-qa.app/Contents/MacOS/ICQuel >/dev/null 2>&1
+  ICQ_THEME=$t ICQ_SNAPSHOT=/tmp/icquel-qa/$t /tmp/icquel-qa.app/Contents/MacOS/ICQuel >/dev/null 2>&1 &
+  pid=$!; for i in {1..120}; do kill -0 $pid 2>/dev/null || break; sleep 1; done   # a run that does not end by itself is a failure (e.g. a modal alert)
+  if kill -0 $pid 2>/dev/null; then echo "$t: run did not finish (blocked?)"; kill $pid; fail=1; fi
   n=$(ls /tmp/icquel-qa/$t/*.png 2>/dev/null | wc -l | tr -d ' ')
   small=$(find /tmp/icquel-qa/$t -name '*.png' -size -3k | wc -l | tr -d ' ')
   echo "$t: $n pictures, $small suspiciously small"
   [ "$n" -lt 20 ] && { echo "  too few pictures"; fail=1 }
   [ "$small" -gt 0 ] && { find /tmp/icquel-qa/$t -name '*.png' -size -3k; fail=1 }
 done
+kill $cafe 2>/dev/null
 exit $fail

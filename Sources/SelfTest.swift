@@ -13,7 +13,7 @@ enum SelfTest {
         if !ok { failures += 1; print("FAIL (SelfTest.swift:\(line)): \(what)") }
     }
     static func run() {
-        bridge(); options(); autoReply(); ai(); giphy(); chatDB(); features(); whatsapp()
+        bridge(); options(); autoReply(); ai(); giphy(); chatDB(); features(); whatsapp(); persistence()
         print("selftest: \(checks) checks, \(failures) failed")
         exit(failures == 0 ? 0 : 1)
     }
@@ -236,6 +236,27 @@ enum SelfTest {
             do { try GifConverter.mp4(from: gif, to: mp4); let d = AVURLAsset(url: mp4).duration.seconds; check(d > 0.4 && d < 1.0, "GIF converted to a video of the right length: \(d)s") }
             catch { check(false, "GIF conversion: \(error)") }
         }
+    }
+
+    /// Everything new that has to survive a restart, and old stores that must still load.
+    static func persistence() {
+        let st = Store.shared
+        let c = Contact(name: "Persist", uin: "pp1", bridge: "wa:1@s.whatsapp.net", notes: "n")
+        st.contacts.append(c); st.history["pp1"] = [Msg(dir: "in", text: "", t: Date(), files: ["/tmp/a.png"])]
+        st.awayTexts["dnd"] = "Back later"; st.showGroups = true; st.showReceipts = false; st.waEnabled = true; st.waAutoAdd = true; st.aiModels["openai"] = "gpt-x"
+        st.save()
+        guard let d = Persist.load(), let saved = try? JSONDecoder().decode(Saved.self, from: d) else { check(false, "saved store decodes"); return }
+        check(saved.contacts.contains { $0.uin == "pp1" && $0.notes == "n" && $0.bridge == "wa:1@s.whatsapp.net" }, "contact with notes and WhatsApp address saved")
+        check(saved.history["pp1"]?.first?.files == ["/tmp/a.png"], "attachments saved in the history")
+        check(saved.awayTexts?["dnd"] == "Back later" && saved.showGroups == true && saved.showReceipts == false && saved.waEnabled == true && saved.waAutoAdd == true && saved.aiModels?["openai"] == "gpt-x" && saved.aiProvider != nil, "new settings saved")
+        st.contacts.removeAll { $0.uin == "pp1" }; st.history["pp1"] = nil; st.awayTexts["dnd"] = nil; st.showGroups = false; st.showReceipts = true; st.waEnabled = false; st.waAutoAdd = false; st.aiModels["openai"] = nil
+        // a store written by 1.0 (none of the new fields) still loads with sane defaults
+        let old = #"{"uin":"123","nick":"Old","status":"online","sounds":true,"contacts":[{"name":"A","uin":"1"}],"freqEnabled":true,"freqMode":"hour","minutes":15,"demoFirst":true,"aiEnabled":false,"history":{"1":[{"dir":"in","text":"hi","t":1000}]}}"#
+        let o = try? JSONDecoder().decode(Saved.self, from: Data(old.utf8))
+        check(o?.contacts.first?.notes == nil && o?.awayTexts == nil && o?.waEnabled == nil && o?.history["1"]?.first?.files == nil, "a 1.0 store loads")
+        // the real store of this Mac (read-only): must keep loading after every change
+        let real = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/ICQuel/store.json")
+        if let rd = try? Data(contentsOf: real) { check((try? JSONDecoder().decode(Saved.self, from: rd)) != nil, "this Mac's own store.json still decodes") }
     }
 
     static func autoReply() {

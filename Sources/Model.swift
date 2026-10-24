@@ -84,7 +84,7 @@ let dummyMessages = [
 ]
 let seedContacts = ["Cool_Dude99", "Angel", "Matrix_Neo", "Sarah", "Sk8erBoy", "Mike"]
 
-private struct Saved: Codable {
+struct Saved: Codable {
     var uin = "", nick = "", status = Status.online, sounds = true
     var contacts: [Contact] = [], freqEnabled = true, freqMode = FreqMode.hour, minutes = 15, demoFirst = true
     var aiEnabled = false, history: [String: [Msg]] = [:]
