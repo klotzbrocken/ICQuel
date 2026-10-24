@@ -23,6 +23,16 @@ enum Presets {
     static func blurb(_ id: String) -> String { all.first { $0.id == id }?.blurb ?? "" }
 }
 
+enum AIProvider: String, CaseIterable, Codable {
+    case anthropic, openai
+    var title: String { self == .anthropic ? "Anthropic (Claude)" : "OpenAI (GPT)" }
+    var defaultModel: String { self == .anthropic ? "claude-haiku-5-5" : "gpt-5-mini" }
+    /// Shown when the live list is not available (no key yet, offline).
+    var fallbackModels: [String] { self == .anthropic ? ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"] : ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o-mini"] }
+    var account: String { self == .anthropic ? "ai-api-key" : "ai-api-key-openai" }   // Keychain item
+    var keyPlaceholder: String { self == .anthropic ? "sk-ant-…" : "sk-…" }
+}
+
 enum AIChat {
     struct Failure: LocalizedError { let errorDescription: String? }
 
@@ -77,23 +87,81 @@ enum AIChat {
         return try await post(key: key, model: model, system: systemPrompt(nick: nick, persona: persona, user: user, assistant: assistant, preset: preset), msgs: msgs, maxTokens: assistant ? 1500 : (initiate ? 300 : 700))
     }
 
-    private static func post(key: String, model: String, system: String, msgs: [[String: String]], maxTokens: Int) async throws -> String {
-        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        req.httpMethod = "POST"; req.timeoutInterval = 45
-        req.setValue(key, forHTTPHeaderField: "x-api-key"); req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["model": normalizeModel(model), "max_tokens": maxTokens, "system": system, "messages": msgs] as [String: Any])
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            let m = (j?["error"] as? [String: Any])?["message"] as? String
-            throw Failure(errorDescription: (m ?? "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)") + ((resp as? HTTPURLResponse)?.statusCode == 404 ? "\n\nUse a model ID such as claude-sonnet-5-5 (Preferences > AI Chat > Model)." : ""))
+    /// Which service answers. The key and the model are kept per provider (Store).
+    static var provider = AIProvider.anthropic
+
+    /// The HTTP request for one chat completion (pure: covered by SelfTest).
+    static func request(provider: AIProvider, key: String, model: String, system: String, msgs: [[String: String]], maxTokens: Int) throws -> URLRequest {
+        var req: URLRequest
+        let body: [String: Any]
+        switch provider {
+        case .anthropic:
+            req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+            req.setValue(key, forHTTPHeaderField: "x-api-key"); req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            body = ["model": normalizeModel(model), "max_tokens": maxTokens, "system": system, "messages": msgs]
+        case .openai:
+            req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+            req.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+            // reasoning models count their hidden thinking against the limit: leave room, the prompts keep the answers short anyway
+            body = ["model": model.trimmingCharacters(in: .whitespaces), "max_completion_tokens": max(maxTokens * 3, 800), "messages": [["role": "system", "content": system]] + msgs]
         }
-        var text = (j?["content"] as? [[String: Any]])?.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else { throw Failure(errorDescription: "Empty reply.") }
+        req.httpMethod = "POST"; req.timeoutInterval = 60
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return req
+    }
+    /// Text of a completion response, or the provider's error (pure: covered by SelfTest).
+    static func parse(provider: AIProvider, data: Data, status: Int) throws -> String {
+        let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard status == 200 else {
+            let m = (j?["error"] as? [String: Any])?["message"] as? String
+            let hint = status == 404 ? "\n\nPick a model from the list in Preferences > AI Chat." : (status == 401 ? "\n\nCheck the API key in Preferences > Privacy." : "")
+            throw Failure(errorDescription: (m ?? "HTTP \(status)") + hint)
+        }
+        var text: String, cut: Bool
+        switch provider {
+        case .anthropic:
+            text = (j?["content"] as? [[String: Any]])?.compactMap { $0["text"] as? String }.joined() ?? ""
+            cut = j?["stop_reason"] as? String == "max_tokens"
+        case .openai:
+            let c = (j?["choices"] as? [[String: Any]])?.first
+            text = (c?["message"] as? [String: Any])?["content"] as? String ?? ""
+            cut = c?["finish_reason"] as? String == "length"
+        }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw Failure(errorDescription: cut ? "The model used its whole token budget for thinking. Pick a non-reasoning model in Preferences > AI Chat." : "Empty reply.") }
         // the model hit the token limit: never show a message that stops in the middle of a sentence
-        if j?["stop_reason"] as? String == "max_tokens", let end = text.lastIndex(where: { ".!?…\n".contains($0) }), text.distance(from: text.startIndex, to: end) > text.count / 3 { text = String(text[...end]) }
+        if cut, let end = text.lastIndex(where: { ".!?…\n".contains($0) }), text.distance(from: text.startIndex, to: end) > text.count / 3 { text = String(text[...end]) }
         return text
+    }
+    private static func post(key: String, model: String, system: String, msgs: [[String: String]], maxTokens: Int) async throws -> String {
+        let req = try request(provider: provider, key: key, model: model, system: system, msgs: msgs, maxTokens: maxTokens)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        return try parse(provider: provider, data: data, status: (resp as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    // MARK: model list (for the drop-down in Preferences)
+    static func modelsRequest(provider: AIProvider, key: String) -> URLRequest {
+        var req = URLRequest(url: URL(string: provider == .anthropic ? "https://api.anthropic.com/v1/models?limit=100" : "https://api.openai.com/v1/models")!)
+        req.timeoutInterval = 20
+        if provider == .anthropic { req.setValue(key, forHTTPHeaderField: "x-api-key"); req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version") }
+        else { req.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
+        return req
+    }
+    /// Chat models from a /v1/models response, newest names first (pure: covered by SelfTest).
+    static func parseModels(provider: AIProvider, data: Data) -> [String] {
+        let ids = (((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["data"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
+        let skip = ["audio", "realtime", "transcribe", "tts", "image", "embedding", "moderation", "search", "whisper", "dall", "davinci", "babbage", "instruct", "sora", "codex", "computer-use"]
+        let ok = ids.filter { id in
+            provider == .anthropic ? id.hasPrefix("claude-") : ((id.hasPrefix("gpt-") || id.hasPrefix("chatgpt-") || id.range(of: "^o[0-9]", options: .regularExpression) != nil) && !skip.contains { id.contains($0) })
+        }
+        return Array(Set(ok)).sorted(by: >)
+    }
+    static func fetchModels(provider: AIProvider, key: String) async throws -> [String] {
+        let (d, r) = try await URLSession.shared.data(for: modelsRequest(provider: provider, key: key))
+        let st = (r as? HTTPURLResponse)?.statusCode ?? 0
+        guard st == 200 else { throw Failure(errorDescription: st == 401 ? "The provider rejected the key (401)." : "Could not load the model list (HTTP \(st)).") }
+        return parseModels(provider: provider, data: d)
     }
 
     /// Engine for the private helper features (draft, translation, summary, auto-reply): Apple's on-device model if switched on and ready, else the API.

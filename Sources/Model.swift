@@ -81,6 +81,7 @@ private struct Saved: Codable {
     var contacts: [Contact] = [], freqEnabled = true, freqMode = FreqMode.hour, minutes = 15, demoFirst = true
     var aiEnabled = false, history: [String: [Msg]] = [:]
     var apiModel: String? = nil
+    var aiProvider: String? = nil, aiModels: [String: String]? = nil
     var simpleMode: Bool? = nil
     var botInit: Bool? = nil, botMin: Int? = nil, botMax: Int? = nil
     var opts: MainOpts? = nil
@@ -96,7 +97,7 @@ private struct Saved: Codable {
 /// Test runs (ICQ_SNAPSHOT) use a throw-away folder and never touch real data.
 enum Persist {
     #if DEBUG
-    static var testMode: Bool { ProcessInfo.processInfo.environment["ICQ_SNAPSHOT"] != nil }
+    static var testMode: Bool { ProcessInfo.processInfo.environment["ICQ_SNAPSHOT"] != nil || ProcessInfo.processInfo.environment["ICQ_SELFTEST"] != nil }
     #else
     static var testMode: Bool { false }
     #endif
@@ -121,14 +122,14 @@ enum Persist {
 }
 
 enum Keychain { // the AI API key lives in the login keychain, not in UserDefaults
-    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "ICQ99b", kSecAttrAccount as String: "ai-api-key"]
-    static func set(_ v: String) {
-        SecItemDelete(base as CFDictionary)
+    private static func base(_ account: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "ICQ99b", kSecAttrAccount as String: account] }
+    static func set(_ v: String, account: String = "ai-api-key") {
+        SecItemDelete(base(account) as CFDictionary)
         guard !v.isEmpty else { return }
-        var a = base; a[kSecValueData as String] = Data(v.utf8); SecItemAdd(a as CFDictionary, nil)
+        var a = base(account); a[kSecValueData as String] = Data(v.utf8); SecItemAdd(a as CFDictionary, nil)
     }
-    static func get() -> String {
-        var q = base; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+    static func get(account: String = "ai-api-key") -> String {
+        var q = base(account); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
         var r: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &r) == errSecSuccess, let d = r as? Data else { return "" }
         return String(decoding: d, as: UTF8.self)
@@ -189,7 +190,36 @@ final class Store: ObservableObject {
     @Published var selected: String?
     /// The AI key lives in the Keychain. It is loaded in the background: the system may ask for permission (the app is re-signed on every build),
     /// and that prompt must never block the UI or app start.
-    var apiKey = "" { didSet { if !loadingKey { Keychain.set(apiKey) } } }
+    var apiKey = "" { didSet { if !loadingKey { Keychain.set(apiKey, account: aiProvider.account) } } }
+    @Published var aiProvider = AIProvider.anthropic
+    var aiModels: [String: String] = [:]          // last chosen model per provider
+    @Published var modelList: [String: [String]] = [:]   // live model lists per provider (Preferences drop-down)
+    @Published var keyStatus = ""
+    /// Loads the model list of the active provider with the current key; also tells whether the key works.
+    func refreshModels() {
+        let p = aiProvider, k = apiKey
+        guard !k.isEmpty else { keyStatus = ""; return }
+        keyStatus = "Checking key…"
+        Task {
+            do { let l = try await AIChat.fetchModels(provider: p, key: k); await MainActor.run { if p == self.aiProvider { self.modelList[p.rawValue] = l; self.keyStatus = "Key works · \(l.count) models available" } } }
+            catch { await MainActor.run { if p == self.aiProvider { self.keyStatus = error.localizedDescription } } }
+        }
+    }
+    /// Entries of the model drop-down: the live list (else the built-in one), always including the current choice.
+    func modelChoices() -> [String] {
+        var l = modelList[aiProvider.rawValue] ?? aiProvider.fallbackModels
+        if !apiModel.isEmpty, !l.contains(apiModel) { l.insert(apiModel, at: 0) }
+        return l
+    }
+    /// Switches the AI service: each provider keeps its own key (Keychain) and model.
+    func switchProvider(_ p: AIProvider) {
+        guard p != aiProvider else { return }
+        aiModels[aiProvider.rawValue] = apiModel
+        aiProvider = p; AIChat.provider = p
+        apiModel = aiModels[p.rawValue] ?? p.defaultModel
+        loadingKey = true; apiKey = ""; loadingKey = false; keyLoaded = false; loadStarted = false
+        loadKeyAsync(); save()
+    }
     @Published var keyLoaded = false
     private var loadingKey = false
 
@@ -200,7 +230,7 @@ final class Store: ObservableObject {
         if let d = Persist.load(), let s = try? JSONDecoder().decode(Saved.self, from: d) {
             uin = s.uin; nick = s.nick; status = s.status; sounds = s.sounds; contacts = s.contacts
             freqEnabled = s.freqEnabled; freqMode = s.freqMode; minutes = s.minutes; demoFirst = s.demoFirst
-            aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; simpleMode = s.simpleMode ?? false
+            aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; aiProvider = AIProvider(rawValue: s.aiProvider ?? "") ?? .anthropic; aiModels = s.aiModels ?? [:]; AIChat.provider = aiProvider; simpleMode = s.simpleMode ?? false
             botInit = s.botInit ?? true; botMin = s.botMin ?? 5; botMax = s.botMax ?? 20; opts = s.opts ?? MainOpts(); appName = s.appName ?? "ICQuel"; bridgeEnabled = s.bridgeEnabled ?? false; bridgeLast = s.bridgeLast ?? 0
             autoAway = s.autoAway ?? false; autoAwayMin = s.autoAwayMin ?? 15; autoAwayDND = s.autoAwayDND ?? false
             hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false
@@ -216,15 +246,15 @@ final class Store: ObservableObject {
         guard !keyLoaded else { done?(); return }
         guard !Persist.testMode else { keyLoaded = true; done?(); return }
         guard !loadStarted else { return }
-        loadStarted = true
+        loadStarted = true; let acct = aiProvider.account
         DispatchQueue.global(qos: .utility).async {
-            let k = Keychain.get()
+            let k = Keychain.get(account: acct)
             DispatchQueue.main.async { self.loadingKey = true; self.apiKey = k; self.loadingKey = false; self.keyLoaded = true; done?() }
         }
     }
     func save() {
         let s = Saved(uin: uin, nick: nick, status: status, sounds: sounds, contacts: contacts, freqEnabled: freqEnabled,
-                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
+                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
         if let d = try? JSONEncoder().encode(s) { Persist.write(d) }
     }
     static func newUin() -> String { String(Int.random(in: 10_000_000...99_999_999)) }
@@ -435,9 +465,9 @@ final class Store: ObservableObject {
     }
     /// Automatic away reply: only to contacts that were allowed ("Allow auto-reply"), once per 6 hours, only 1:1 iMessage, only for messages that arrived after the status was set.
     func maybeAutoReply(_ c: Contact, _ m: Bridge.Incoming) {
-        guard autoReplyOn, quiet, c.autoReply == true, let h = c.bridge, m.imessage, !m.group, m.date > statusSince else { return }
         let now = Date().timeIntervalSince1970
-        if let last = autoReplied[c.uin], now - last < 6 * 3600 { return }
+        guard let h = c.bridge, AutoReplyRule.allows(enabled: autoReplyOn, quiet: quiet, contactAllowed: c.autoReply == true, imessage: m.imessage, group: m.group,
+                                                   msgDate: m.date, statusSince: statusSince, lastReply: autoReplied[c.uin], now: now) else { return }
         autoReplied[c.uin] = now; save()
         let fallback = autoReplyText, statusText = status.menuLabel, me = nick
         func send(_ t: String) {
@@ -551,5 +581,14 @@ enum Sound { // sound files of the active theme / built-in set
         if let h = hold[name], let t = last[name], Date().timeIntervalSince(t) < h { return }
         last[name] = Date()
         if let f = Assets.resource("sounds", name + ".wav"), let snd = NSSound(contentsOfFile: f, byReference: false) { live.append(snd); snd.play(); if live.count > 12 { live.removeFirst() } }
+    }
+}
+
+/// Guards of the automatic away reply (pure, covered by SelfTest): opt-in, quiet status, allowed contact, 1:1 iMessage only, only messages after the status was set, once per 6 hours.
+enum AutoReplyRule {
+    static func allows(enabled: Bool, quiet: Bool, contactAllowed: Bool, imessage: Bool, group: Bool, msgDate: Date, statusSince: Date, lastReply: Double?, now: Double) -> Bool {
+        guard enabled, quiet, contactAllowed, imessage, !group, msgDate > statusSince else { return false }
+        if let l = lastReply, now - l < 6 * 3600 { return false }
+        return true
     }
 }

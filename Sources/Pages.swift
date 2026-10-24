@@ -99,28 +99,6 @@ struct SoundsPage: View {
     }
 }
 
-// MARK: Preferences > Security = original page 3018
-struct SecurityPage: View {
-    @State private var auth = 1364
-    @State private var level = 1009
-    @State private var pw1 = ""
-    @State private var pw2 = ""
-    @State private var save = false
-    static var size: CGSize { let t = Tpl.load("3018"); return CGSize(width: t.w, height: t.h) }
-    var body: some View {
-        DlgView(tpl: Tpl.load("3018"), custom: { c in
-            switch c.id {
-            case 1364, 1365: return AnyView(DefCtl(c: c, on: auth == c.id) { auth = c.id })
-            case 1007, 1008, 1009: return AnyView(DefCtl(c: c, on: level == c.id) { level = c.id })
-            case 1366: return AnyView(REdit(text: $pw1, secure: true))
-            case 1367: return AnyView(REdit(text: $pw2, secure: true))
-            case 1368: return AnyView(DefCtl(c: c, on: save) { save.toggle() })
-            default: return nil
-            }
-        })
-    }
-}
-
 // MARK: New / edit AI chatbot
 struct BotView: View {
     let uin: String?          // nil = new bot

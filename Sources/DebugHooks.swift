@@ -33,6 +33,7 @@ enum DebugHooks {
         ICQ.openIncoming(c.uin)
     }
     static func run() {
+        if ProcessInfo.processInfo.environment["ICQ_SELFTEST"] != nil { SelfTest.run() }
         if ProcessInfo.processInfo.environment["ICQ_LIGHT"] != nil { NSApp.appearance = NSAppearance(named: .aqua) }   // self-test only
         if let dir = ProcessInfo.processInfo.environment["ICQ_SNAPSHOT"] { // scripted self-test: ICQ_PACK=<theme folder> imports and selects it first
             if let pk = ProcessInfo.processInfo.environment["ICQ_PACK"] {
@@ -41,7 +42,7 @@ enum DebugHooks {
             let steps: [(String, () -> Void)] = [("main", { DebugHooks.dummyData(); DebugHooks.offOpts(); ICQ.openMain() }), ("live", { DebugHooks.dummyData(); ICQ.openMain(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { Store.shared.opts.tabs = false; Store.shared.opts.showIMessage = false } }), ("setup", { ICQ.start(force: true) }), ("conn", { ICQ.connecting() }), ("edit", { if let c = Store.shared.contacts.first { ICQ.openContactEdit(c.uin) } }),
                                        ("incoming", { DebugHooks.dummyChat() }), ("hidedemo", { Store.shared.hideDemo = true; ICQ.openMain() }),
                 ("im-in", { let s = Store.shared; if let c = s.contacts.first(where: \.isLive) { s.log(c.uin, "in", "Are we still on for tonight?"); s.deliver(to: c, text: "See you at 8?"); ICQ.openIncoming(c.uin) } }),
-                ("im-send", { let s = Store.shared; if let c = s.contacts.first(where: \.isLive) { s.aiDrafts[c.uin] = "Yes, 8 works for me. See you there!"; ICQ.openSend(c.uin) } }), ("send", { if let c = Store.shared.contacts.first { ICQ.openSend(c.uin) } }), ("about", { ICQ.openAbout() }), ("add", { ICQ.openAdd() }), ("p0", { ICQ.openPrefs(0) }), ("p1", { ICQ.openPrefs(1) }), ("p2", { ICQ.openPrefs(2) }), ("p3", { ICQ.openPrefs(3) }), ("p4", { ICQ.openPrefs(4) }), ("p6", { ICQ.openPrefs(6) }), ("p7", { ICQ.openPrefs(7) }), ("p8", { ICQ.openPrefs(8) }), ("away", { ICQ.confirmDelete("x") })]
+                ("im-send", { let s = Store.shared; if let c = s.contacts.first(where: \.isLive) { s.aiDrafts[c.uin] = "Yes, 8 works for me. See you there!"; ICQ.openSend(c.uin) } }), ("send", { if let c = Store.shared.contacts.first { ICQ.openSend(c.uin) } }), ("about", { ICQ.openAbout() }), ("add", { ICQ.openAdd() }), ("p0", { ICQ.openPrefs(0) }), ("p1", { ICQ.openPrefs(1) }), ("p2", { ICQ.openPrefs(2) }), ("p3", { ICQ.openPrefs(3) }), ("p4", { ICQ.openPrefs(4) }), ("p5", { ICQ.openPrefs(5) }), ("p6", { ICQ.openPrefs(6) }), ("p7", { ICQ.openPrefs(7) }), ("p8", { ICQ.openPrefs(8) }), ("away", { ICQ.confirmDelete("x") })]
             let only = ProcessInfo.processInfo.environment["ICQ_ONLY"]?.split(separator: ",").map(String.init)
             for (i, st) in steps.filter({ only == nil || only!.contains($0.0) }).enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + Double(i) * 1.2) { WinMgr.shared.closeAll(); st.1(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { WinMgr.shared.snapshot(to: dir, prefix: st.0 + "-") } }

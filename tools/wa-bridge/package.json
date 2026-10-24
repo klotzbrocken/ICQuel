@@ -1,0 +1,14 @@
+{
+  "name": "icquel-wa-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless WhatsApp Web (Baileys) JSON-lines helper for ICQuel",
+  "main": "index.js",
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "^9.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

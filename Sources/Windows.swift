@@ -77,6 +77,9 @@ struct PrefsView: View {
     @State private var showKey = false
     @State private var newName = ""
     @State private var model = Store.shared.apiModel
+    @State private var fda = ""
+    @State private var skipApply = false
+    @State private var pending: DispatchWorkItem?
     @State private var botSel: String?
     @State private var scaleChoice = UI.scale
     @State private var bridgeOn = Store.shared.bridgeEnabled
@@ -93,20 +96,30 @@ struct PrefsView: View {
     @State private var optModern = Theme.isModern
     @State private var bridgeMsg = ""
     /// Retro window height per page, so there are no large empty grey areas.
-    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 395, 6: 600, 7: 400, 8: 620]
+    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 720, 6: 520, 7: 400, 8: 620]
     static let icons: [(String, Color)] = [("person.crop.circle.fill", .blue), ("person.2.fill", .green), ("tray.and.arrow.down.fill", .orange), ("text.bubble.fill", .teal), ("speaker.wave.2.fill", .pink),
                                            ("lock.fill", .gray), ("sparkles", .purple), ("macwindow", .indigo), ("message.badge.filled.fill", Color(red: 0.2, green: 0.78, blue: 0.35))]
     /// The first page grows with the number of installed themes (+ room for the fan-made note).
     static func height(_ t: Int) -> CGFloat { t == 0 ? 380 + CGFloat(max(0, Assets.choices().count - 4)) * 17 + 45 : (heights[t] ?? 520) }
-    static let pages = ["My Details", "Contact List", "Incoming", "Messages", "Sounds", "Security", "AI Chat", "Main Window", "Bridge"]
+    static let pages = ["My Details", "Contact List", "Incoming", "Messages", "Sounds", "Privacy", "AI Chat", "Main Window", "Bridge"]
     var body: some View {
         (Theme.isModern ? AnyView(modernBody) : AnyView(classicBody))
-            .onAppear { if !s.keyLoaded { s.loadKeyAsync() } }
+            .onAppear { if !s.keyLoaded { s.loadKeyAsync { s.refreshModels() } } else if s.modelList[s.aiProvider.rawValue] == nil { s.refreshModels() }; fda = Bridge.checkAccess() == .ok ? "granted" : "not granted yet" }
+            .onChange(of: stateKey) { _ in schedule() }
+            .onChange(of: s.aiProvider) { _ in key = ""; model = s.apiModel; s.refreshModels() }
+            .onDisappear { pending?.cancel(); if !skipApply { apply() } }
             .onChange(of: tab) { t in if !Theme.isModern { WinMgr.shared.resize("prefs", 600, PrefsView.height(t)) } }
             .onChange(of: s.apiKey) { if key.isEmpty { key = $0 } }
     }
+    /// Everything the user can change on the pages: any change is applied after a short pause (no OK / Apply).
+    var stateKey: String { [nick, uin, "\(sounds)", "\(enabled)", "\(mode)", mins, "\(first)", "\(autoAway)", "\(draftIM)", "\(autoAddIM)", replyText, autoMin, "\(autoDND)", key, "\(ai)", model, "\(bridgeOn)", appNameDraft, "\(opts)", "\(botInit)", botMinS, botMaxS, themeChoice, "\(scaleChoice)"].joined(separator: "\u{1}") }
+    func schedule() {
+        pending?.cancel()
+        let w = DispatchWorkItem { apply() }; pending = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: w)
+    }
     var modernBody: some View {
-        let visible = [0, 1, 2, 3, 4, 7, 6, 8]
+        let visible = [0, 1, 2, 3, 4, 5, 7, 6, 8]
         return VStack(spacing: 12) {
             HStack(alignment: .top, spacing: 14) {
                 VStack(spacing: 2) {
@@ -127,16 +140,14 @@ struct PrefsView: View {
                         Text(PrefsView.pages[tab]).font(.system(size: 20, weight: .semibold))
                     }.padding(.horizontal, 10)
                     Group {
-                        if tab == 4 { ModernSounds().padding(.horizontal, 10) } else if tab == 5 { Text("Coming soon.").padding(10) } else { ScrollView { Page { pageBody } } }
+                        if tab == 4 { ModernSounds().padding(.horizontal, 10) } else { ScrollView { Page { pageBody } } }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
             HStack {
                 RButton(title: "Restore Defaults", minWidth: 120, action: restore)
                 Spacer()
-                RButton(title: "Cancel") { WinMgr.shared.close("prefs") }
-                RButton(title: "Apply", action: apply)
-                RButton(title: "OK", isDefault: true) { apply(); WinMgr.shared.close("prefs") }
+                RButton(title: "Close", isDefault: true) { WinMgr.shared.close("prefs") }
             }
         }.padding(16).frame(width: 760, height: 540)
     }
@@ -146,24 +157,22 @@ struct PrefsView: View {
             Group {
                 switch tab {
                 case 4: SoundsPage().padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color.gray98).overlay(Bevel())
-                case 5: SecurityPage().padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color.gray98).overlay(Bevel())
                 default: Page { ScrollView { VStack(alignment: .leading, spacing: 4) { pageBody }.frame(maxWidth: .infinity, alignment: .topLeading) } }   // long pages scroll: OK / Cancel / Apply stay visible
                 }
             }.padding(.top, -1)
             HStack {
                 RButton(title: "Restore All Defaults", minWidth: 150, action: restore)
                 Spacer()
-                RButton(title: "OK", isDefault: true) { apply(); WinMgr.shared.close("prefs") }
-                RButton(title: "Cancel") { WinMgr.shared.close("prefs") }
-                RButton(title: "Apply", action: apply)
+                RButton(title: "Close", isDefault: true) { WinMgr.shared.close("prefs") }
             }.padding(.top, 8)
         }.padding(8)
     }
     func restore() {
         s.freqEnabled = true; s.freqMode = .hour; s.minutes = 15; s.demoFirst = true; s.sounds = true; s.opts = MainOpts(); ICQ.applyMainOptions(); s.save()
         UserDefaults.standard.removeObject(forKey: "snd_files"); UserDefaults.standard.removeObject(forKey: "snd_message"); for e in Sound.defaults.keys { UserDefaults.standard.removeObject(forKey: "snd_on_" + e) }
-        s.resetSched(); let t = tab; WinMgr.shared.close("prefs"); ICQ.openPrefs(t)
+        s.resetSched(); skipApply = true; let t = tab; WinMgr.shared.close("prefs"); ICQ.openPrefs(t)
     }
+    func note(_ t: String) -> some View { Text(t).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
     @ViewBuilder var pageBody: some View {
         switch tab {
         case 0:
@@ -233,11 +242,52 @@ struct PrefsView: View {
                         .overlay(Rectangle().fill(Color.gray98).frame(height: 1), alignment: .bottom)
                 }
             }.padding(.vertical, 3) } }.frame(height: 330)
-        case 8:
-            RCheck(title: "Enable the Messages bridge (iMessage through the Messages app of this Mac)", on: $bridgeOn)
-            Text("Status: " + (bridgeOn ? s.bridgeStatus : "Off")).foregroundColor(.hint).padding(.top, 2)
-            RCheck(title: "Also show new iMessages from people I have not imported yet (adds them as contacts)", on: $autoAddIM)
-            Text("Off by default: then only the conversations you import are read.").foregroundColor(.hint)
+        case 5:
+            RGroup(title: "Reading messages and attachments (Full Disk Access)") {
+                note("ICQuel reads the Messages database and its attachment folder read-only. macOS only allows this with Full Disk Access. Only the conversations you import are shown; nothing is copied anywhere or sent to a server.")
+                Text("Status: " + (fda.isEmpty ? "…" : fda)).foregroundColor(.hint)
+                HStack {
+                    RButton(title: "1. Full Disk Access…", minWidth: 130) { _ = Bridge.checkAccess(); Bridge.openPrivacySettings() }
+                    RButton(title: "Show app in Finder", minWidth: 120) { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+                    RButton(title: "Check", minWidth: 60) { fda = Bridge.checkAccess() == .ok ? "granted" : "not granted yet" }
+                }
+                note("If the app is not in the list: click \u{201C}Show app in Finder\u{201D}, drag the app into the list (or use +) and switch it on. Restart the app afterwards.")
+            }
+            RGroup(title: "Sending and other apps (Automation)") {
+                note("Sending, replies and attachments go through the Messages app. \u{201C}New Reminder\u{201D} and \u{201C}New ToDo\u{201D} use Reminders and Notes. macOS asks once per app.")
+                HStack {
+                    RButton(title: "2. Allow Messages control", minWidth: 150) { Bridge.requestAutomation { msg in bridgeMsg = msg } }
+                    RButton(title: "Check again") { s.bridgeEnabled = bridgeOn; s.startBridge() }
+                }
+                if !bridgeMsg.isEmpty { note(bridgeMsg) }
+            }.padding(.top, 6)
+            RGroup(title: "AI service and key") {
+                HStack(spacing: 6) {
+                    Text("Service:")
+                    RButton(title: s.aiProvider.title + "   \u{25BE}", minWidth: 190) { popRMenu(AIProvider.allCases.map { p in RMItem(title: p.title, checked: s.aiProvider == p, fn: { s.switchProvider(p) }) }) }
+                }
+                RField(placeholder: s.aiProvider.keyPlaceholder, text: $key, secure: !showKey).padding(.top, 4)
+                RCheck(title: "Show key", on: $showKey).padding(.top, 2)
+                if !s.keyStatus.isEmpty { note(s.keyStatus) }
+                note("The key is stored in your macOS Keychain. Text leaves your Mac only when you use a chatbot or one of the AI features below, and only goes to the service you picked.")
+            }.padding(.top, 6)
+            RGroup(title: "AI features that read your chats") {
+                RCheck(title: "Prepare replies to iMessages (AI draft, never sent)", on: Binding(get: { draftIM }, set: { v in
+                    if !v { draftIM = false; return }
+                    retroBox("Prepare iMessage replies?", "When a real iMessage arrives, the text of that chat (the latest messages) is sent to the Anthropic API with your key, and the AI writes a reply DRAFT. The draft only appears in the reply window; nothing is ever sent to your contact unless you press Send yourself.\n\nDo you really want this?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { draftIM = true } }
+                }))
+                Text("Only for iMessage contacts. You always review and send the text yourself.").foregroundColor(.hint)
+                RCheck(title: "Summarize what I missed when I am back (Away / DND ends)", on: Binding(get: { s.aiSummary }, set: { v in
+                    if !v { s.aiSummary = false; s.save(); return }
+                    retroBox("Summarize missed messages?", s.aiLocal ? "When your Away / DND status ends, the AI writes one line per unread iMessage chat. This runs on your Mac." : "When your Away / DND status ends, the unread iMessages are sent to the Anthropic API with your key and the AI writes one line per chat.\n\nDo you really want this?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.aiSummary = true; s.save() } }
+                }))
+                if LocalAI.available {
+                    RCheck(title: "Use Apple's on-device model for drafts, translation, summaries and auto-replies (private, no API key)", on: Binding(get: { s.aiLocal }, set: { s.aiLocal = $0; AIChat.useLocal = $0; s.save() }))
+                } else {
+                    Text("On-device model (Apple Intelligence): not available on this Mac yet (\(LocalAI.status)).").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
+                }
+                note("Chatbots only see their own conversation. Drafts and summaries are never sent to a contact. These features need AI Chat to be enabled.")
+            }.padding(.top, 6)
             RGroup(title: "Automatic reply while I am away") {
                 RCheck(title: "Reply automatically to iMessages while my status is Away, N/A, Occupied or DND", on: Binding(get: { s.autoReplyOn }, set: { v in
                     if !v { s.autoReplyOn = false; s.save(); return }
@@ -247,17 +297,15 @@ struct PrefsView: View {
                 if s.aiEnabled { RCheck(title: "Let the AI write the reply (it only says that I cannot answer now)", on: Binding(get: { s.autoReplyAI }, set: { s.autoReplyAI = $0; s.save() })) }
                 Text("Nobody gets a reply unless you ticked \"Allow auto-reply\" for that contact.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
             }.padding(.top, 4)
-            HStack {
-                RButton(title: "1. Full Disk Access…", minWidth: 130) { _ = Bridge.checkAccess(); Bridge.openPrivacySettings() }
-                RButton(title: "Show app in Finder", minWidth: 120) { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
-            }
-            HStack {
-                RButton(title: "2. Allow Messages control", minWidth: 150) { Bridge.requestAutomation { msg in bridgeMsg = msg } }
-                RButton(title: "Check again") { s.bridgeEnabled = bridgeOn; s.startBridge() }
-            }
-            if !bridgeMsg.isEmpty { Text(bridgeMsg).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
-            Text("If the app is not in the Full Disk Access list: click “Show app in Finder”, then drag the app into the list (or use the + button) and switch it on. Restart the app afterwards. Button 2 shows the macOS prompt that adds the app under Privacy & Security > Automation.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
-            Text("Receiving needs Full Disk Access for this app, sending needs the Automation permission for Messages. Only the contacts listed below are read; nothing else is read, stored or sent. AI chatbots never answer bridged chats.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+            RGroup(title: "Other network use") {
+                note("The GIF search sends your search words to Giphy. Update checks contact GitHub (Sparkle). Nothing else connects to the internet.")
+            }.padding(.top, 6)
+        case 8:
+            RCheck(title: "Enable the Messages bridge (iMessage through the Messages app of this Mac)", on: $bridgeOn)
+            Text("Status: " + (bridgeOn ? s.bridgeStatus : "Off")).foregroundColor(.hint).padding(.top, 2)
+            RCheck(title: "Also show new iMessages from people I have not imported yet (adds them as contacts)", on: $autoAddIM)
+            Text("Off by default: then only the conversations you import are read.").foregroundColor(.hint)
+            note("Permissions (Full Disk Access, Messages control) are in Preferences > Privacy. Only the contacts listed below are read; nothing else is read, stored or sent.")
             RButton(title: "Import from Messages…", minWidth: 170) { ICQ.openMessagesImport() }.padding(.top, 2)
             RGroup(title: "Connected iMessage contacts") {
                 Sunken { ScrollView { VStack(spacing: 0) {
@@ -311,29 +359,18 @@ struct PrefsView: View {
             }
             Text("Each theme keeps its own main-window settings. Pick a theme above to edit its options.").foregroundColor(.hint).padding(.top, 4)
         default:
-            RGroup(title: "AI API Key") {
-                RField(placeholder: "API key", text: $key, secure: !showKey)
-                RCheck(title: "Show key", on: $showKey).padding(.top, 4)
-                Text("Model (ID, e.g. claude-sonnet-5-5):").padding(.top, 4); RField(text: $model)
+            RGroup(title: "AI service") {
+                Text("Service: " + s.aiProvider.title + "  (change it and set the key in Preferences > Privacy)").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Text("Model:")
+                    RButton(title: (model.isEmpty ? "Choose…" : model) + "   ▾", minWidth: 220) {
+                        popRMenu(s.modelChoices().map { m in RMItem(title: m, checked: m == model, fn: { model = m }) } + [RMItem(sep: true), RMItem(title: "Custom…", fn: { ICQ.askText("Model", "Model ID:", model) { model = $0 } })])
+                    }
+                }.padding(.top, 4)
+                if !s.keyStatus.isEmpty { Text(s.keyStatus).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
             }
             RCheck(title: "Enable real chats with the AI", on: $ai)
-            Text("Off = chatbots answer with sample messages (no network).\nOn = replies come from the AI API using your key.").foregroundColor(.hint).padding(.top, 2)
-            if ai {
-                RCheck(title: "Prepare replies to iMessages (AI draft, never sent)", on: Binding(get: { draftIM }, set: { v in
-                    if !v { draftIM = false; return }
-                    retroBox("Prepare iMessage replies?", "When a real iMessage arrives, the text of that chat (the latest messages) is sent to the Anthropic API with your key, and the AI writes a reply DRAFT. The draft only appears in the reply window; nothing is ever sent to your contact unless you press Send yourself.\n\nDo you really want this?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { draftIM = true } }
-                }))
-                Text("Only for iMessage contacts. You always review and send the text yourself.").foregroundColor(.hint)
-                RCheck(title: "Summarize what I missed when I am back (Away / DND ends)", on: Binding(get: { s.aiSummary }, set: { v in
-                    if !v { s.aiSummary = false; s.save(); return }
-                    retroBox("Summarize missed messages?", s.aiLocal ? "When your Away / DND status ends, the AI writes one line per unread iMessage chat. This runs on your Mac." : "When your Away / DND status ends, the unread iMessages are sent to the Anthropic API with your key and the AI writes one line per chat.\n\nDo you really want this?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.aiSummary = true; s.save() } }
-                }))
-                if LocalAI.available {
-                    RCheck(title: "Use Apple's on-device model for drafts, translation, summaries and auto-replies (private, no API key)", on: Binding(get: { s.aiLocal }, set: { s.aiLocal = $0; AIChat.useLocal = $0; s.save() }))
-                } else {
-                    Text("On-device model (Apple Intelligence): not available on this Mac yet (\(LocalAI.status)).").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            Text("Off = chatbots answer with sample messages (no network).\nOn = replies come from the AI service using your key.").foregroundColor(.hint).padding(.top, 2)
             Text("Note: by default chatbots play a chat friend and do not announce that they are an AI. They are still AI chatbots; tick \"Act as a normal AI assistant\" on a bot for answers that say so.").foregroundColor(.hint).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
             RGroup(title: "AI Chatbots") {
                 Sunken { ScrollView { VStack(spacing: 0) {
@@ -365,6 +402,7 @@ struct PrefsView: View {
     }
     func addName() { if s.add(newName) != nil { newName = "" } }
     func apply() {
+        let schedChanged = s.freqEnabled != enabled || s.freqMode != mode || s.minutes != max(1, Int(mins) ?? s.minutes) || s.demoFirst != first
         s.nick = nick.trimmingCharacters(in: .whitespaces).isEmpty ? s.nick : nick.trimmingCharacters(in: .whitespaces)
         s.uin = uin.trimmingCharacters(in: .whitespaces).isEmpty ? s.uin : uin.trimmingCharacters(in: .whitespaces)
         s.sounds = sounds; s.freqEnabled = enabled; s.freqMode = mode; s.minutes = max(1, Int(mins) ?? s.minutes); s.demoFirst = first; s.aiDraftIMessage = draftIM && ai; s.autoReplyText = replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? s.autoReplyText : replyText; s.bridgeAutoAdd = autoAddIM; s.autoAway = autoAway; s.autoAwayMin = max(1, Int(autoMin) ?? s.autoAwayMin); s.autoAwayDND = autoDND
@@ -373,7 +411,7 @@ struct PrefsView: View {
         let nm = appNameDraft.trimmingCharacters(in: .whitespaces); if nm != s.appName { s.appName = nm.isEmpty ? "ICQuel" : nm; s.save(); AppDelegate.rebuildMenu() }
         if bridgeOn != s.bridgeEnabled { s.bridgeEnabled = bridgeOn; s.save(); s.startBridge() }
         if s.opts != opts { s.opts = opts; ICQ.applyMainOptions() }
-        if s.keyLoaded || !key.isEmpty { s.apiKey = key }; s.aiEnabled = ai; s.botInit = botInit; s.botMin = max(1, Int(botMinS) ?? s.botMin); s.botMax = max(s.botMin, Int(botMaxS) ?? s.botMax); s.apiModel = AIChat.normalizeModel(model).isEmpty ? s.apiModel : AIChat.normalizeModel(model); model = s.apiModel; s.save(); s.resetSched()
+        if (s.keyLoaded || !key.isEmpty) && s.apiKey != key { s.apiKey = key; s.refreshModels() }; s.aiEnabled = ai; s.botInit = botInit; s.botMin = max(1, Int(botMinS) ?? s.botMin); s.botMax = max(s.botMin, Int(botMaxS) ?? s.botMax); let m = s.aiProvider == .anthropic ? AIChat.normalizeModel(model) : model.trimmingCharacters(in: .whitespaces); if !m.isEmpty { s.apiModel = m }; if model != s.apiModel { model = s.apiModel }; s.save(); if schedChanged { s.resetSched() }
     }
 }
 
