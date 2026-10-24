@@ -111,7 +111,8 @@ enum ICQ {
     static func openBot(_ u: String?) { let id = "bot" + (u ?? "new"); WinMgr.shared.open(id, u == nil ? "New AI Chatbot" : "Edit AI Chatbot", BotView.size.width, BotView.size.height) { BotView(uin: u) } }
     static func applyMainOptions() { WinMgr.shared.setLevel("main", (Theme.isModern ? s.opts.mOnTop : s.opts.alwaysOnTop) ? .floating : .normal) }
     static func setSimple(_ simple: Bool) { if Theme.isModern { return }; s.simpleMode = simple; s.save(); WinMgr.shared.resize("main", 164, simple ? 261 : 330) }
-    static func relayout(prefs: Bool = true) { WinMgr.shared.closeAll(); if s.uin.isEmpty { start(); return }; openMain(); refreshTray(); if prefs { openPrefs(0) } }
+    static var relayouts = 0
+    static func relayout(prefs: Bool = true) { relayouts += 1; WinMgr.shared.closeAll(); if s.uin.isEmpty { start(); return }; openMain(); refreshTray(); if prefs { openPrefs(0) } }
         static func openAdd() {
         if Theme.isModern { WinMgr.shared.open("add", "Add Users", ModernAdd.size.width, ModernAdd.size.height) { ModernAdd() }; return }
         WinMgr.shared.open("add", "Add Users", AddWizardView.size.width, AddWizardView.size.height) { AddWizardView() } }
@@ -122,7 +123,7 @@ enum ICQ {
     static func confirmDelete(_ u: String) {
         if Theme.isModern { confirm("Delete \(s.contact(u)?.name ?? "?")?", "The contact will be removed from your list.", ok: "Delete", cancel: "Cancel") { s.remove(u) }; return }
         WinMgr.shared.open("del" + u, "Confirm Delete User", DeleteView.size.width, DeleteView.size.height) { DeleteView(uin: u) } }
-    static func openPrefs(_ tab: Int = 1) { WinMgr.shared.close("prefs"); if Theme.isModern { WinMgr.shared.open("prefs", "Preferences", 760, 540) { PrefsView(tab: tab) }; return }; WinMgr.shared.open("prefs", "\(App.name) Preferences – " + s.nick, 600, PrefsView.height(tab), icon: "prefsicon") { PrefsView(tab: tab) } }
+    static func openPrefs(_ tab: Int = 1) { WinMgr.shared.close("prefs"); if Theme.isModern { WinMgr.shared.open("prefs", "Preferences", 760, 540) { PrefsView(tab: tab) }; return }; WinMgr.shared.open("prefs", "\(App.name) Preferences – " + s.nick, PrefsView.width(tab), PrefsView.height(tab), icon: "prefsicon") { PrefsView(tab: tab) } }
     static func setStatus(_ st: Status) {
         s.status = st; s.save(); refreshTray()
         if Theme.isModern, [.away, .na, .occupied, .dnd, .ffc].contains(st) {

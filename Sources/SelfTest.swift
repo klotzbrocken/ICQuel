@@ -179,6 +179,10 @@ enum SelfTest {
         check(st.history["wa1"]!.count == n, "echo of my own send is not logged twice")
         st.waIncoming(msg("49151234@s.whatsapp.net", "typed on my phone", fromMe: true))
         check(st.history["wa1"]?.last?.text == "typed on my phone" && st.history["wa1"]?.last?.dir == "out", "message written on another device goes to the history")
+        st.waAutoAdd = true; st.waIncoming(msg("4915999@s.whatsapp.net", "new here", name: "Zoe"))
+        check(st.contacts.contains { $0.bridge == "wa:4915999@s.whatsapp.net" && $0.name == "Zoe" } && st.history[st.contacts.first { $0.bridge == "wa:4915999@s.whatsapp.net" }!.uin]?.last?.text == "new here", "auto-add: unknown 1:1 sender becomes a contact")
+        st.waIncoming(msg("777@g.us", "group spam", group: true)); check(!st.contacts.contains { $0.bridge == "wa:777@g.us" }, "auto-add never adds groups")
+        st.waAutoAdd = false; st.contacts.removeAll { $0.bridge == "wa:4915999@s.whatsapp.net" }
         st.waEnabled = false; st.waIncoming(msg("49151234@s.whatsapp.net", "while off")); check(st.history["wa1"]?.last?.text != "while off", "nothing arrives while WhatsApp is off")
         st.contacts.removeAll { $0.uin == "wa1" || $0.uin == "wa2" }; st.history["wa1"] = nil; st.history["wa2"] = nil; st.unread["wa1"] = nil; st.unread["wa2"] = nil
 

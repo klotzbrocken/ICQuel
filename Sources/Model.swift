@@ -99,7 +99,7 @@ private struct Saved: Codable {
     var hideDemo: Bool? = nil, aiDraftIMessage: Bool? = nil, bridgeAutoAdd: Bool? = nil
     var showGroups: Bool? = nil, showReceipts: Bool? = nil
     var awayTexts: [String: String]? = nil
-    var waEnabled: Bool? = nil
+    var waEnabled: Bool? = nil, waAutoAdd: Bool? = nil
     var aiLocal: Bool? = nil, aiSummary: Bool? = nil, autoReplyOn: Bool? = nil, autoReplyText: String? = nil, autoReplyAI: Bool? = nil, autoReplied: [String: Double]? = nil
 }
 
@@ -185,6 +185,7 @@ final class Store: ObservableObject {
     static let defaultAway = ["away": "I'm away from my computer right now.", "na": "I'm not available. Please leave a message.", "occupied": "I'm busy right now – urgent messages only.",
                               "dnd": "Please do not disturb.", "ffc": "I'm free for a chat!"]
     func awayText(_ st: Status) -> String { awayTexts[st.rawValue] ?? Store.defaultAway[st.rawValue] ?? "" }
+    @Published var waAutoAdd = false         // unknown WhatsApp 1:1 senders become contacts (off: they are dropped)
     @Published var waEnabled = false         // experimental WhatsApp helper (Preferences > Privacy)
     @Published var showGroups = false        // group chats can be imported and are shown (off by default)
     @Published var showReceipts = true       // "delivered / read" under my last message
@@ -252,7 +253,7 @@ final class Store: ObservableObject {
             aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; aiProvider = AIProvider(rawValue: s.aiProvider ?? "") ?? .anthropic; aiModels = s.aiModels ?? [:]; AIChat.provider = aiProvider; simpleMode = s.simpleMode ?? false
             botInit = s.botInit ?? true; botMin = s.botMin ?? 5; botMax = s.botMax ?? 20; opts = s.opts ?? MainOpts(); appName = s.appName ?? "ICQuel"; bridgeEnabled = s.bridgeEnabled ?? false; bridgeLast = s.bridgeLast ?? 0
             autoAway = s.autoAway ?? false; autoAwayMin = s.autoAwayMin ?? 15; autoAwayDND = s.autoAwayDND ?? false
-            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false; showGroups = s.showGroups ?? false; awayTexts = s.awayTexts ?? [:]; waEnabled = s.waEnabled ?? false; showReceipts = s.showReceipts ?? true
+            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false; showGroups = s.showGroups ?? false; awayTexts = s.awayTexts ?? [:]; waEnabled = s.waEnabled ?? false; waAutoAdd = s.waAutoAdd ?? false; showReceipts = s.showReceipts ?? true
             aiLocal = s.aiLocal ?? false; aiSummary = s.aiSummary ?? false; autoReplyOn = s.autoReplyOn ?? false; autoReplyAI = s.autoReplyAI ?? false
             if let t = s.autoReplyText, !t.isEmpty { autoReplyText = t }; autoReplied = s.autoReplied ?? [:]
             AIChat.useLocal = aiLocal
@@ -273,7 +274,7 @@ final class Store: ObservableObject {
     }
     func save() {
         let s = Saved(uin: uin, nick: nick, status: status, sounds: sounds, contacts: contacts, freqEnabled: freqEnabled,
-                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, showGroups: showGroups, showReceipts: showReceipts, awayTexts: awayTexts, waEnabled: waEnabled, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
+                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, showGroups: showGroups, showReceipts: showReceipts, awayTexts: awayTexts, waEnabled: waEnabled, waAutoAdd: waAutoAdd, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
         if let d = try? JSONEncoder().encode(s) { Persist.write(d) }
     }
     static func newUin() -> String { String(Int.random(in: 10_000_000...99_999_999)) }
@@ -572,7 +573,10 @@ final class Store: ObservableObject {
 
     /// A message from the WhatsApp helper: only chats you imported are shown; everything else is dropped.
     func waIncoming(_ m: WAMessage) {
-        guard waEnabled, let c = contacts.first(where: { $0.bridge == "wa:" + m.jid }) else { return }
+        guard waEnabled else { return }
+        var found = contacts.first(where: { $0.bridge == "wa:" + m.jid })
+        if found == nil, waAutoAdd, !m.group, !m.fromMe, m.jid.hasSuffix("@s.whatsapp.net") { found = addWAContact(m.name.isEmpty ? WAProtocol.number(m.jid) : m.name, jid: m.jid) }
+        guard let c = found else { return }
         if m.fromMe {   // written on another device: only the history gets it (our own sends are logged when they are made)
             if history[c.uin]?.last(where: { $0.dir == "out" }).map({ $0.text == m.text && Date().timeIntervalSince($0.t) < 60 }) == true { return }
             log(c.uin, "out", m.text, m.date, files: m.files.isEmpty ? nil : m.files); return

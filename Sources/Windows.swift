@@ -81,6 +81,10 @@ struct PrefsView: View {
     @State private var model = Store.shared.apiModel
     @State private var fda = ""
     @State private var skipApply = false
+    @State private var appliedTheme = Assets.currentChoiceId()
+    @State private var appliedScale = UI.scale
+    @State private var appliedName = Store.shared.appName
+    static var relayouting = false   // a window rebuild is under way: no preferences view may start another one
     @State private var pending: DispatchWorkItem?
     @State private var botSel: String?
     @State private var scaleChoice = UI.scale
@@ -98,25 +102,31 @@ struct PrefsView: View {
     @State private var optModern = Theme.isModern
     @State private var bridgeMsg = ""
     /// Retro window height per page, so there are no large empty grey areas.
-    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 780, 6: 520, 7: 400, 8: 620]
+    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 600, 6: 520, 7: 400, 8: 700]
     static let icons: [(String, Color)] = [("person.crop.circle.fill", .blue), ("person.2.fill", .green), ("tray.and.arrow.down.fill", .orange), ("text.bubble.fill", .teal), ("speaker.wave.2.fill", .pink),
                                            ("lock.fill", .gray), ("sparkles", .purple), ("macwindow", .indigo), ("message.badge.filled.fill", Color(red: 0.2, green: 0.78, blue: 0.35))]
     /// The first page grows with the number of installed themes (+ room for the fan-made note).
+    /// The Privacy page has the most text: wider window, fewer lines.
+    static func width(_ t: Int) -> CGFloat { t == 5 ? 780 : 600 }
     static func height(_ t: Int) -> CGFloat { t == 0 ? 380 + CGFloat(max(0, Assets.choices().count - 4)) * 17 + 45 : (heights[t] ?? 520) }
     static let pages = ["My Details", "Contact List", "Incoming", "Messages", "Sounds", "Privacy", "AI Chat", "Main Window", "Bridge"]
     var body: some View {
         (Theme.isModern ? AnyView(modernBody) : AnyView(classicBody))
             .onAppear { if !s.keyLoaded { s.loadKeyAsync { s.refreshModels() } } else if s.modelList[s.aiProvider.rawValue] == nil { s.refreshModels() }; fda = Bridge.checkAccess() == .ok ? "granted" : "not granted yet" }
             .onChange(of: stateKey) { _ in schedule() }
+            #if DEBUG
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ICQDebugTheme"))) { if let t = $0.object as? String { themeChoice = t } }
+            #endif
             .onChange(of: s.aiProvider) { _ in key = ""; model = s.apiModel; s.refreshModels() }
             .onDisappear { pending?.cancel(); if !skipApply { apply() } }
-            .onChange(of: tab) { t in if !Theme.isModern { WinMgr.shared.resize("prefs", 600, PrefsView.height(t)) } }
+            .onChange(of: tab) { t in if !Theme.isModern { WinMgr.shared.resize("prefs", PrefsView.width(t), PrefsView.height(t)) } }
             .onChange(of: s.apiKey) { if key.isEmpty { key = $0 } }
     }
     /// Everything the user can change on the pages: any change is applied after a short pause (no OK / Apply).
     var stateKey: String { [nick, uin, "\(sounds)", "\(enabled)", "\(mode)", mins, "\(first)", "\(autoAway)", "\(draftIM)", "\(autoAddIM)", replyText, autoMin, "\(autoDND)", key, "\(ai)", model, "\(bridgeOn)", appNameDraft, "\(opts)", "\(botInit)", botMinS, botMaxS, themeChoice, "\(scaleChoice)"].joined(separator: "\u{1}") }
     func schedule() {
         pending?.cancel()
+        guard !PrefsView.relayouting else { return }
         let w = DispatchWorkItem { apply() }; pending = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: w)
     }
@@ -155,7 +165,7 @@ struct PrefsView: View {
     }
     var classicBody: some View {
         VStack(spacing: 0) {
-            WTabs(rows: [[0, 1, 2, 3], [4, 5, 7, 6, 8]], titles: PrefsView.pages, width: 584, sel: $tab)
+            WTabs(rows: [[0, 1, 2, 3], [4, 5, 7, 6, 8]], titles: PrefsView.pages, width: PrefsView.width(tab) - 16, sel: $tab)
             Group {
                 switch tab {
                 case 4: SoundsPage().padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color.gray98).overlay(Bevel())
@@ -269,20 +279,8 @@ struct PrefsView: View {
                 RCheck(title: "Show delivered / read status under my last message", on: Binding(get: { s.showReceipts }, set: { s.showReceipts = $0; s.save() })).padding(.top, 4)
                 note("Read from the Messages database on this Mac; nobody is told anything.")
             }.padding(.top, 6)
-            RGroup(title: "WhatsApp (experimental)") {
-                note("Links ICQuel like WhatsApp Web, through an open-source library. WhatsApp offers no official way to do this for a personal account and may block accounts that use unofficial clients; a second phone number is safer. Only chats you import are shown, all others are ignored. Nothing is ever sent automatically.")
-                RCheck(title: "Use WhatsApp", on: Binding(get: { s.waEnabled }, set: { v in
-                    if !v { WABridge.shared.stop(); s.waEnabled = false; s.save(); return }
-                    retroBox("Use WhatsApp (experimental)?", "ICQuel will connect to WhatsApp like WhatsApp Web, in your name. This is unofficial and WhatsApp may block the account. A second number is safer.\n\nYou link it once by scanning a QR code in WhatsApp > Linked devices. ICQuel downloads the Node.js runtime once from nodejs.org (about 45 MB).\n\nDo you want to continue?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.waEnabled = true; s.save(); WABridge.shared.start(userInitiated: true) } }
-                }))
-                if s.waEnabled { Text("Status: " + wa.statusText).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
-                if let q = wa.qr { Image(nsImage: q).interpolation(.none).resizable().frame(width: 190, height: 190).padding(.vertical, 4) }
-                if s.waEnabled {
-                    HStack {
-                        RButton(title: "Import chats…", minWidth: 110) { ICQ.openWAImport() }
-                        RButton(title: "Unlink", minWidth: 70) { retroBox("Unlink WhatsApp?", "ICQuel logs out of WhatsApp and forgets the link. Imported chats stay in the list.", icon: "question32", buttons: ["Unlink", "Cancel"]) { if $0 == 0 { WABridge.shared.logout() } } }
-                    }
-                }
+            RGroup(title: "WhatsApp") {
+                note("WhatsApp is switched on and managed in Preferences > Bridge (experimental, unofficial: WhatsApp may block accounts that use it).")
             }.padding(.top, 6)
             RGroup(title: "AI service and key") {
                 HStack(spacing: 6) {
@@ -330,6 +328,25 @@ struct PrefsView: View {
             Text("Off by default: then only the conversations you import are read.").foregroundColor(.hint)
             note("Permissions (Full Disk Access, Messages control) are in Preferences > Privacy. Only the contacts listed below are read; nothing else is read, stored or sent.")
             RButton(title: "Import from Messages…", minWidth: 170) { ICQ.openMessagesImport() }.padding(.top, 2)
+            RGroup(title: "WhatsApp (experimental)") {
+                note("Links ICQuel like WhatsApp Web, through an open-source library. WhatsApp offers no official way to do this for a personal account and may block accounts that use unofficial clients; a second phone number is safer. Only chats you import are shown, all others are ignored. Nothing is ever sent automatically.")
+                RCheck(title: "Use WhatsApp", on: Binding(get: { s.waEnabled }, set: { v in
+                    if !v { WABridge.shared.stop(); s.waEnabled = false; s.save(); return }
+                    retroBox("Use WhatsApp (experimental)?", "ICQuel will connect to WhatsApp like WhatsApp Web, in your name. This is unofficial and WhatsApp may block the account. A second number is safer.\n\nYou link it once by scanning a QR code in WhatsApp > Linked devices. ICQuel downloads the Node.js runtime once from nodejs.org (about 45 MB).\n\nDo you want to continue?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.waEnabled = true; s.save(); WABridge.shared.start(userInitiated: true) } }
+                }))
+                if s.waEnabled {
+                    RCheck(title: "Also add new WhatsApp senders automatically (1:1 chats only)", on: Binding(get: { s.waAutoAdd }, set: { s.waAutoAdd = $0; s.save() })).padding(.top, 2)
+                    note("Off: only chats you import are shown, everything else is dropped. Messages from imported chats arrive by themselves while ICQuel is running; you do not import again.")
+                }
+                if s.waEnabled { Text("Status: " + wa.statusText).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
+                if let q = wa.qr { Image(nsImage: q).interpolation(.none).resizable().frame(width: 190, height: 190).padding(.vertical, 4) }
+                if s.waEnabled {
+                    HStack {
+                        RButton(title: "Import chats…", minWidth: 110) { ICQ.openWAImport() }
+                        RButton(title: "Unlink", minWidth: 70) { retroBox("Unlink WhatsApp?", "ICQuel logs out of WhatsApp and forgets the link. Imported chats stay in the list.", icon: "question32", buttons: ["Unlink", "Cancel"]) { if $0 == 0 { WABridge.shared.logout() } } }
+                    }
+                }
+            }.padding(.top, 6)
             RGroup(title: "Connected iMessage contacts") {
                 Sunken { ScrollView { VStack(spacing: 0) {
                     ForEach(s.contacts.filter(\.isIM)) { c in
@@ -425,13 +442,20 @@ struct PrefsView: View {
     }
     func addName() { if s.add(newName) != nil { newName = "" } }
     func apply() {
+        let rebuild = !PrefsView.relayouting
         let schedChanged = s.freqEnabled != enabled || s.freqMode != mode || s.minutes != max(1, Int(mins) ?? s.minutes) || s.demoFirst != first
         s.nick = nick.trimmingCharacters(in: .whitespaces).isEmpty ? s.nick : nick.trimmingCharacters(in: .whitespaces)
         s.uin = uin.trimmingCharacters(in: .whitespaces).isEmpty ? s.uin : uin.trimmingCharacters(in: .whitespaces)
         s.sounds = sounds; s.freqEnabled = enabled; s.freqMode = mode; s.minutes = max(1, Int(mins) ?? s.minutes); s.demoFirst = first; s.aiDraftIMessage = draftIM && ai; s.autoReplyText = replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? s.autoReplyText : replyText; s.bridgeAutoAdd = autoAddIM; s.autoAway = autoAway; s.autoAwayMin = max(1, Int(autoMin) ?? s.autoAwayMin); s.autoAwayDND = autoDND
-        if themeChoice != Assets.currentChoiceId() { Assets.select(themeChoice); s.save(); DispatchQueue.main.async { ICQ.relayout() } }
-        else if UI.scale != scaleChoice { UI.scale = scaleChoice; s.save(); DispatchQueue.main.async { ICQ.relayout() } }
-        let nm = appNameDraft.trimmingCharacters(in: .whitespaces); if nm != s.appName { s.appName = nm.isEmpty ? "ICQuel" : nm; s.save(); AppDelegate.rebuildMenu() }
+        // Theme, size and name rebuild every window. Only what THIS view changed is applied (never a stale value), and only one rebuild at a time.
+        func rebuildWindows() {
+            PrefsView.relayouting = true; skipApply = true; pending?.cancel()
+            DispatchQueue.main.async { ICQ.relayout(); DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { PrefsView.relayouting = false } }
+        }
+        if rebuild, themeChoice != appliedTheme, themeChoice != Assets.currentChoiceId() { appliedTheme = themeChoice; Assets.select(themeChoice); s.save(); rebuildWindows() }
+        else if rebuild, scaleChoice != appliedScale, UI.scale != scaleChoice { appliedScale = scaleChoice; UI.scale = scaleChoice; s.save(); rebuildWindows() }
+        let nm = appNameDraft.trimmingCharacters(in: .whitespaces)
+        if rebuild, nm != appliedName, nm != s.appName { appliedName = nm; s.appName = nm.isEmpty ? "ICQuel" : nm; s.save(); AppDelegate.rebuildMenu() }
         if bridgeOn != s.bridgeEnabled { s.bridgeEnabled = bridgeOn; s.save(); s.startBridge() }
         if s.opts != opts { s.opts = opts; ICQ.applyMainOptions() }
         if (s.keyLoaded || !key.isEmpty) && s.apiKey != key { s.apiKey = key; s.refreshModels() }; s.aiEnabled = ai; s.botInit = botInit; s.botMin = max(1, Int(botMinS) ?? s.botMin); s.botMax = max(s.botMin, Int(botMaxS) ?? s.botMax); let m = s.aiProvider == .anthropic ? AIChat.normalizeModel(model) : model.trimmingCharacters(in: .whitespaces); if !m.isEmpty { s.apiModel = m }; if model != s.apiModel { model = s.apiModel }; s.save(); if schedChanged { s.resetSched() }

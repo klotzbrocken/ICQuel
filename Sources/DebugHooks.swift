@@ -34,6 +34,11 @@ enum DebugHooks {
     }
     static func run() {
         if ProcessInfo.processInfo.environment["ICQ_SELFTEST"] != nil { SelfTest.run() }
+        if let t = ProcessInfo.processInfo.environment["ICQ_THEMELOOP"] {   // changes the theme with the preferences open and counts the window rebuilds
+            DebugHooks.dummyData(); ICQ.openMain(); ICQ.openPrefs(0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NotificationCenter.default.post(name: Notification.Name("ICQDebugTheme"), object: t) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { print("relayouts after a theme change:", ICQ.relayouts); exit(ICQ.relayouts <= 2 ? 0 : 1) }
+        }
         if ProcessInfo.processInfo.environment["ICQ_LIGHT"] != nil { NSApp.appearance = NSAppearance(named: .aqua) }   // self-test only
         if let dir = ProcessInfo.processInfo.environment["ICQ_SNAPSHOT"] { // scripted self-test: ICQ_PACK=<theme folder> imports and selects it first
             if let pk = ProcessInfo.processInfo.environment["ICQ_PACK"] {
