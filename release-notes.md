@@ -1,3 +1,12 @@
+## ICQuel 1.1 (draft, not released)
+
+- **Preferences apply immediately** (no OK / Apply), and a new **Privacy** page explains every permission and every feature that sends text somewhere.
+- **OpenAI support** next to Anthropic, with a model drop-down filled from the provider.
+- **iMessage**: group chats (optional), pictures / GIFs / files shown in the chat and sent from it, delivered and read status.
+- **Chat extras**: GIF search (Powered by GIPHY), Photos picker, Find, ActiveList, Forward, Request Chat, Random Chat, status messages, contact notes, `icquel://status/...` for Focus automations.
+- **Away helpers** (all optional): auto-reply with guardrails, "What did I miss?" summary, drafts, Apple on-device model where available.
+- **WhatsApp (experimental)**: off by default, unofficial, see the warning in Preferences > Privacy.
+
 ## ICQuel 1.0
 
 First release of ICQuel, a retro-styled chat companion for macOS.
