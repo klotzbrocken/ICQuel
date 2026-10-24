@@ -18,6 +18,7 @@ struct HistoryText: View {
                             Text("\(m.dir == "in" ? name : s.nick) (\(stamp(m.t))):").font(rf(bold: true)); if !m.text.isEmpty { Text(m.text) }; if let f = m.files, !f.isEmpty { AttachList(files: f, maxW: 200) }
                         }
                     }
+                    if s.showReceipts, s.history[uin]?.last?.dir == "out", let r = s.receipts[uin] { Text(r).font(rf(10)).foregroundColor(.hint).frame(maxWidth: .infinity, alignment: .trailing) }
                     Color.clear.frame(height: 1).id("end")
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(4) }
                 .onAppear { p.scrollTo("end") }.onChange(of: s.history[uin]?.count) { _ in p.scrollTo("end") }
@@ -260,6 +261,12 @@ struct PrefsView: View {
                     RButton(title: "Check again") { s.bridgeEnabled = bridgeOn; s.startBridge() }
                 }
                 if !bridgeMsg.isEmpty { note(bridgeMsg) }
+            }.padding(.top, 6)
+            RGroup(title: "iMessage chats") {
+                RCheck(title: "Show group chats (import them from Messages)", on: Binding(get: { s.showGroups }, set: { s.showGroups = $0; s.save() }))
+                note("Group messages appear in the group's own chat, never inside a person's chat. Auto-reply and AI drafts never run in groups.")
+                RCheck(title: "Show delivered / read status under my last message", on: Binding(get: { s.showReceipts }, set: { s.showReceipts = $0; s.save() })).padding(.top, 4)
+                note("Read from the Messages database on this Mac; nobody is told anything.")
             }.padding(.top, 6)
             RGroup(title: "AI service and key") {
                 HStack(spacing: 6) {

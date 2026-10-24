@@ -7,7 +7,9 @@ import Contacts
 /// Sending goes through AppleScript (needs the one-time Automation permission), receiving reads ~/Library/Messages/chat.db
 /// read-only (needs Full Disk Access). Only messages from contacts you explicitly connected are used; nothing else is read or stored.
 enum Bridge {
-    static var dbPath: String { NSHomeDirectory() + "/Library/Messages/chat.db" }
+    /// SelfTest points this at a fixture database.
+    static var dbOverride: String?
+    static var dbPath: String { dbOverride ?? NSHomeDirectory() + "/Library/Messages/chat.db" }
 
     enum Access: Equatable { case ok, noFullDiskAccess, missing }
 
@@ -39,13 +41,13 @@ enum Bridge {
         return sqlite3_column_int64(st, 0)
     }
 
-    struct Incoming { var rowid: Int64; var handle: String; var text: String; var date: Date; var imessage: Bool; var group: Bool; var files: [String] = [] }
+    struct Incoming { var rowid: Int64; var handle: String; var text: String; var date: Date; var imessage: Bool; var group: Bool; var files: [String] = []; var chatGuid: String? = nil }
     /// Incoming (not from me) messages with an id above `after`; reactions are skipped.
     static func incoming(after: Int64) -> [Incoming] {
         guard let db = open() else { return [] }
         defer { sqlite3_close(db) }
         let sql = """
-        SELECT m.ROWID, m.text, m.attributedBody, m.date, h.id, m.service, m.cache_roomnames IS NOT NULL FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
+        SELECT m.ROWID, m.text, m.attributedBody, m.date, h.id, m.service, m.cache_roomnames IS NOT NULL, (SELECT c.guid FROM chat_message_join j JOIN chat c ON c.ROWID = j.chat_id WHERE j.message_id = m.ROWID LIMIT 1) FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
         WHERE m.ROWID > ?1 AND m.is_from_me = 0 AND (m.associated_message_type IS NULL OR m.associated_message_type = 0) ORDER BY m.ROWID LIMIT 200
         """
         var st: OpaquePointer?
@@ -60,7 +62,7 @@ enum Bridge {
             let date = Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 3)) / 1_000_000_000)
             let handle = sqlite3_column_text(st, 4).map { String(cString: $0) } ?? ""
             let service = sqlite3_column_text(st, 5).map { String(cString: $0) } ?? ""
-            out.append(Incoming(rowid: id, handle: handle, text: text, date: date, imessage: service == "iMessage", group: sqlite3_column_int(st, 6) != 0, files: files))
+            out.append(Incoming(rowid: id, handle: handle, text: text, date: date, imessage: service == "iMessage", group: sqlite3_column_int(st, 6) != 0, files: files, chatGuid: sqlite3_column_text(st, 7).map { String(cString: $0) }))
         }
         return out
     }
@@ -154,13 +156,13 @@ enum Bridge {
             done(out)
         }
     }
-    struct Recent { var fromMe: Bool; var text: String; var date: Date }
+    struct Recent { var fromMe: Bool; var text: String; var date: Date; var files: [String] = [] }
     /// The last `limit` messages (both directions) exchanged with one handle, oldest first.
     static func recent(handle: String, limit: Int) -> [Recent] {
         guard let db = open() else { return [] }
         defer { sqlite3_close(db) }
         let sql = """
-        SELECT m.text, m.attributedBody, m.date, m.is_from_me, h.id FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
+        SELECT m.text, m.attributedBody, m.date, m.is_from_me, h.id, m.ROWID FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
         WHERE (m.associated_message_type IS NULL OR m.associated_message_type = 0) AND m.cache_roomnames IS NULL ORDER BY m.ROWID DESC LIMIT 800
         """
         var st: OpaquePointer?
@@ -169,10 +171,84 @@ enum Bridge {
         var out: [Recent] = []
         while sqlite3_step(st) == SQLITE_ROW, out.count < limit {
             guard let hid = sqlite3_column_text(st, 4).map({ String(cString: $0) }), same(hid, handle) else { continue }
-            let text = messageText(st, 0, 1)
-            out.append(Recent(fromMe: sqlite3_column_int(st, 3) != 0, text: text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000)))
+            let files = attachmentFiles(db, sqlite3_column_int64(st, 5))
+            var text = messageText(st, 0, 1); if !files.isEmpty, text == "[Attachment]" { text = "" }
+            out.append(Recent(fromMe: sqlite3_column_int(st, 3) != 0, text: text, date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000), files: files))
         }
         return out.reversed()
+    }
+
+    // MARK: group chats
+    struct Group { var guid: String; var name: String; var last: String; var date: Date }
+    /// The most recent group chats (newest first); a group without a name is called after up to three participants.
+    static func groups(limit: Int) -> [Group] {
+        guard let db = open() else { return [] }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT c.guid, c.display_name, m.text, m.attributedBody, m.date, c.ROWID FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID JOIN chat c ON c.ROWID = j.chat_id
+        WHERE c.style = 43 AND (m.associated_message_type IS NULL OR m.associated_message_type = 0) ORDER BY m.ROWID DESC LIMIT 4000
+        """
+        var st: OpaquePointer?
+        defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return [] }
+        var out: [Group] = [], seen = Set<String>()
+        while sqlite3_step(st) == SQLITE_ROW, out.count < limit {
+            guard let guid = sqlite3_column_text(st, 0).map({ String(cString: $0) }), seen.insert(guid).inserted else { continue }
+            var name = sqlite3_column_text(st, 1).map { String(cString: $0) } ?? ""
+            if name.isEmpty { name = participants(db, sqlite3_column_int64(st, 5)).prefix(3).joined(separator: ", ") }
+            out.append(Group(guid: guid, name: name.isEmpty ? "Group" : name, last: messageText(st, 2, 3), date: Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 4)) / 1_000_000_000)))
+        }
+        return out
+    }
+    private static func participants(_ db: OpaquePointer?, _ chat: Int64) -> [String] {
+        var st: OpaquePointer?; defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, "SELECT h.id FROM chat_handle_join ch JOIN handle h ON h.ROWID = ch.handle_id WHERE ch.chat_id = ?1", -1, &st, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_int64(st, 1, chat)
+        var out: [String] = []
+        while sqlite3_step(st) == SQLITE_ROW { if let p = sqlite3_column_text(st, 0) { out.append(String(cString: p)) } }
+        return out
+    }
+    /// The last messages of one group chat (oldest first); `from` is the sender's handle for incoming ones.
+    static func recentGroup(guid: String, limit: Int) -> [(fromMe: Bool, from: String, text: String, date: Date, files: [String])] {
+        guard let db = open() else { return [] }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT m.text, m.attributedBody, m.date, m.is_from_me, h.id, m.ROWID FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID JOIN chat c ON c.ROWID = j.chat_id LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE c.guid = ?1 AND (m.associated_message_type IS NULL OR m.associated_message_type = 0) ORDER BY m.ROWID DESC LIMIT ?2
+        """
+        var st: OpaquePointer?
+        defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_text(st, 1, guid, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)); sqlite3_bind_int(st, 2, Int32(limit))
+        var out: [(fromMe: Bool, from: String, text: String, date: Date, files: [String])] = []
+        while sqlite3_step(st) == SQLITE_ROW {
+            let files = attachmentFiles(db, sqlite3_column_int64(st, 5))
+            var text = messageText(st, 0, 1); if !files.isEmpty, text == "[Attachment]" { text = "" }
+            out.append((sqlite3_column_int(st, 3) != 0, sqlite3_column_text(st, 4).map { String(cString: $0) } ?? "", text, Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, 2)) / 1_000_000_000), files))
+        }
+        return out.reversed()
+    }
+
+    // MARK: delivery / read status of my own messages
+    /// State of the newest message I sent to a 1:1 handle: 0 sent, 1 delivered, 2 read (with the time of that state).
+    static func receipt(handle: String) -> (state: Int, date: Date)? {
+        guard let db = open() else { return nil }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT m.is_delivered, m.date_delivered, m.date_read, m.date, h.id FROM message m JOIN handle h ON m.handle_id = h.ROWID
+        WHERE m.is_from_me = 1 AND m.cache_roomnames IS NULL AND (m.associated_message_type IS NULL OR m.associated_message_type = 0) ORDER BY m.ROWID DESC LIMIT 400
+        """
+        var st: OpaquePointer?
+        defer { sqlite3_finalize(st) }
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return nil }
+        func d(_ i: Int32) -> Date { Date(timeIntervalSinceReferenceDate: Double(sqlite3_column_int64(st, i)) / 1_000_000_000) }
+        while sqlite3_step(st) == SQLITE_ROW {
+            guard let hid = sqlite3_column_text(st, 4).map({ String(cString: $0) }), same(hid, handle) || hid == handle else { continue }
+            if sqlite3_column_int64(st, 2) > 0 { return (2, d(2)) }
+            if sqlite3_column_int(st, 0) != 0 || sqlite3_column_int64(st, 1) > 0 { return (1, sqlite3_column_int64(st, 1) > 0 ? d(1) : d(3)) }
+            return (0, d(3))
+        }
+        return nil
     }
 
     // MARK: handles
@@ -189,6 +265,9 @@ enum Bridge {
     private static func lit(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
     static func script(text: String, handle: String, participant: Bool) -> String {
         let body = text.components(separatedBy: "\n").map(lit).joined(separator: " & linefeed & ")
+        if handle.hasPrefix("group:") {   // group chat: address the chat itself
+            return "tell application \"Messages\"\nsend (\(body)) to chat id \(lit(String(handle.dropFirst(6))))\nend tell"
+        }
         return """
         tell application "Messages"
             set targetService to 1st service whose service type = iMessage
@@ -202,7 +281,9 @@ enum Bridge {
         DispatchQueue.main.async {
             func run(_ participant: Bool) -> String? {
                 var err: NSDictionary?
-                let src = "tell application \"Messages\"\nset targetService to 1st service whose service type = iMessage\nset targetBuddy to \(participant ? "participant" : "buddy") \(lit(handle)) of targetService\nsend POSIX file \(lit(file.path)) to targetBuddy\nend tell"
+                let src = handle.hasPrefix("group:")
+                    ? "tell application \"Messages\"\nsend POSIX file \(lit(file.path)) to chat id \(lit(String(handle.dropFirst(6))))\nend tell"
+                    : "tell application \"Messages\"\nset targetService to 1st service whose service type = iMessage\nset targetBuddy to \(participant ? "participant" : "buddy") \(lit(handle)) of targetService\nsend POSIX file \(lit(file.path)) to targetBuddy\nend tell"
                 NSAppleScript(source: src)?.executeAndReturnError(&err)
                 return err.map { ($0[NSAppleScript.errorMessage] as? String) ?? "AppleScript error \($0[NSAppleScript.errorNumber] ?? "")" }
             }

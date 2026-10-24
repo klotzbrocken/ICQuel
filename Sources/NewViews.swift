@@ -47,8 +47,7 @@ struct AwayView: View {
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     init(status: Status) {
         self.status = status
-        _msg = State(initialValue: ["away": "I'm away from my computer right now.", "na": "I'm not available. Please leave a message.", "occupied": "I'm busy right now – urgent messages only.",
-                                    "dnd": "Please do not disturb.", "ffc": "I'm free for a chat!"][status.rawValue] ?? "")
+        _msg = State(initialValue: Store.shared.awayText(status))
     }
     var body: some View {
         let word = status == .na ? "N/A" : (status == .ffc ? "free for chat" : status.rawValue)
@@ -56,10 +55,11 @@ struct AwayView: View {
             switch c.id {
             case 1: return AnyView(PushBtn(label: "Closing in \(left) sec", isDefault: true) { WinMgr.shared.close("away") })
             case 1237: return AnyView(REdit(text: $msg, multiline: true))
-            case 1541: return AnyView(PushBtn(label: "Select Message") { notice("Not available in the local demo.") })
+            case 1541: return AnyView(PushBtn(label: "Default") { msg = Store.defaultAway[status.rawValue] ?? "" })
             default: return nil
             }
         }.onReceive(timer) { _ in left -= 1; if left <= 0 { WinMgr.shared.close("away") } }
+        .onChange(of: msg) { Store.shared.awayTexts[status.rawValue] = $0; Store.shared.save() }
     }
     static var size: CGSize { let t = Tpl.load("2064"); return CGSize(width: t.w, height: t.h) }
 }
@@ -198,8 +198,8 @@ struct IncomingView: View {
                 }.overlay(Bevel(raised: false)).at(R(2, 92, W - 4, mh))
                 etched("Response Action", R(0, H - 64, W, 38))
                 PushBtn(label: "Reply", isDefault: true) { pop(); WinMgr.shared.close(id); ICQ.openSend(uin) }.at(R(8, H - 52, 66, 21))
-                PushBtn(label: "Forward") { comingSoon() }.at(R(80, H - 52, 66, 21))
-                PushBtn(label: "Request Chat") { comingSoon() }.at(R(W - 102, H - 52, 94, 21))
+                PushBtn(label: "Forward") { ICQ.forward(m?.text ?? "", files: m?.files ?? [], from: uin) }.at(R(80, H - 52, 66, 21))
+                PushBtn(label: "Request Chat") { ICQ.requestChat(uin) }.at(R(W - 102, H - 52, 94, 21))
                 PushBtn(label: "More Functions") { popMenu(Attach.moreItems(uin, openSend: true) + [NSMenuItem.separator(), MItem("Message Archive") { ICQ.openArchive(uin) }]) }.at(R(2, H - 24, 104, 22))
                 PushBtn(label: "Close", isCancel: true) { pop(); WinMgr.shared.close(id) }.at(R(W - 146, H - 24, 64, 22))
                 PushBtn(label: "Read Next") { pop(); WinMgr.shared.setTitle(id, IncomingView.title(max(0, q.count - 1))) }.disabled(q.count < 2).at(R(W - 78, H - 24, 76, 22))

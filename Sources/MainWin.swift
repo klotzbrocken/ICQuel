@@ -149,7 +149,7 @@ struct MainView: View {
                             if o.btnInstructions { flat("Instructions") { notice(MainView.help) } }
                             flat("To Advanced Mode") { ICQ.setSimple(false) }
                             if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() } }
-                            if o.btnRandom { flat("Find Random Chat Partner") { comingSoon() } }
+                            if o.btnRandom { flat("Find Random Chat Partner") { ICQ.randomChat() } }
                             if o.btnWeb { flat("Website") { openWeb("https://myretromac.app") } }
                             if o.btnCool { flat(brand("ICQ Cool Links")) { ICQ.openURL("http://myretromac.app/") } }
                         }.padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 4)
@@ -171,7 +171,7 @@ struct MainView: View {
                             if o.btnInstructions { flat("Instructions") { notice(MainView.help) } }
                             flat("To Simple Mode") { ICQ.setSimple(true) }
                             if s.bridgeEnabled { flat("Import from Messages…") { ICQ.openMessagesImport() } }
-                            if o.btnRandom { flat("Find Random Chat Partner") { comingSoon() } }
+                            if o.btnRandom { flat("Find Random Chat Partner") { ICQ.randomChat() } }
                             if o.btnWeb { flat("Website") { openWeb("https://myretromac.app") } }
                             if o.btnCool { flat(brand("ICQ Cool Links")) { ICQ.openURL("http://myretromac.app/") } }
                         }.padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 4)

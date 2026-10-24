@@ -71,6 +71,38 @@ enum ICQ {
          MItem("FaceTime Video", enabled: c.callTarget != nil) { faceTime(c, audio: false) }, MItem("FaceTime Audio", enabled: c.callTarget != nil) { faceTime(c, audio: true) },
          MItem("Prepare AI Reply Draft", enabled: c.isLive && s.aiEnabled && s.aiDraftIMessage) { s.prepareDraft(for: c) }]
     }
+    static func openFind() { WinMgr.shared.close("find"); WinMgr.shared.open("find", "Find – ICQ White Pages", FindView.size.width, FindView.size.height, resizable: Theme.isModern) { FindView() } }
+    static func openActive() { WinMgr.shared.close("active"); WinMgr.shared.open("active", "ICQ ActiveList", ActiveListView.size.width, ActiveListView.size.height, resizable: Theme.isModern) { ActiveListView() } }
+    /// Random Chat: a made-up chat partner (an AI chatbot with a random persona; without an AI key it answers with sample lines).
+    static let randoms: [(String, String, String)] = [
+        ("RetroRita", "technerd", "A 1999 computer enthusiast who loves modems, Winamp and LAN parties."),
+        ("NightOwl_99", "friend", "A friendly night owl who is up too late and loves talking about music, games and life."),
+        ("SunnyDay_", "friend", "A cheerful, curious person who likes asking questions and sharing small joys."),
+        ("QuakeKid", "gaming", "A gamer from the e-sports scene who talks about frag movies, clans and ping times."),
+        ("MissMidi", "technerd", "A tracker-music fan who talks about MIDI files, demoscene and old sound cards."),
+        ("PixelPete", "gaming", "A retro gaming collector who loves pixel art and arcade stories."),
+        ("DeepThought", "mentor", "A calm, thoughtful person who likes philosophical small talk and good advice."),
+        ("CyberGran", "family", "A warm grandmother who just discovered the internet and asks for help with funny questions.")]
+    static func randomChat() {
+        guard !s.uin.isEmpty else { return }
+        let r = randoms.randomElement()!
+        var name = r.0, n = 2; while s.contacts.contains(where: { $0.name == name }) { name = r.0 + String(n); n += 1 }
+        guard let c = s.addBot(name, persona: r.2, initiative: false, preset: r.1) else { return }
+        openSend(c.uin)
+    }
+    /// Forward / Request Chat: asks first, then sends exactly like the send window would.
+    static func forward(_ text: String, files: [String], from uin: String) {
+        let targets = s.contacts.filter { $0.uin != uin && (!$0.isLive || s.bridgeEnabled) }
+        guard !targets.isEmpty, !(text.isEmpty && files.isEmpty) else { NSSound.beep(); return }
+        popMenu(targets.map { c in MItem("Forward to " + c.name) {
+            retroBox("Forward message?", "Send this message to \(c.name)?", icon: "question32", buttons: ["Send", "Cancel"]) { if $0 == 0 { s.sendText(to: c.uin, text, files: files) } }
+        } })
+    }
+    static func requestChat(_ uin: String) {
+        guard let c = s.contact(uin) else { return }
+        let text = "Hi \(c.name), do you have time for a chat? (ICQ chat request)"
+        retroBox("Request chat?", "Send \u{201C}\(text)\u{201D} to \(c.name)?", icon: "question32", buttons: ["Send", "Cancel"]) { if $0 == 0 { s.sendText(to: uin, text) } }
+    }
     static func openArchive(_ u: String? = nil) { WinMgr.shared.open("archive", "Message Archive", 480, 360, resizable: Theme.isModern) { ArchiveView(cur: u ?? s.selected) } }
     static func openBot(_ u: String?) { let id = "bot" + (u ?? "new"); WinMgr.shared.open(id, u == nil ? "New AI Chatbot" : "Edit AI Chatbot", BotView.size.width, BotView.size.height) { BotView(uin: u) } }
     static func applyMainOptions() { WinMgr.shared.setLevel("main", (Theme.isModern ? s.opts.mOnTop : s.opts.alwaysOnTop) ? .floating : .normal) }
@@ -105,7 +137,7 @@ enum ICQ {
         let na = { comingSoon() }
         func st(_ x: Status) -> RMItem { RMItem(title: x.menuLabel, icon: x.rawValue, fn: { setStatus(x) }) }
         popRMenu([
-            RMItem(title: "Random Chat", icon: "random", children: ["Find Random User", "Available For Random Chat", "My Random Chat Settings"].map { RMItem(title: $0, fn: na) }),
+            RMItem(title: "Random Chat", icon: "random", children: [RMItem(title: "Find Random User", fn: { randomChat() })] + ["Available For Random Chat", "My Random Chat Settings"].map { RMItem(title: $0, fn: na) }),
             RMItem(title: "Online Status", header: true),
             st(.online), st(.ffc), RMItem(sep: true), st(.away), st(.na), RMItem(sep: true), st(.occupied), st(.dnd), RMItem(sep: true), st(.invisible), st(.offline),
         ])
@@ -147,8 +179,8 @@ enum ICQ {
          RMItem(title: "Email", icon: "m_email", children: stub(["Send Email", "Send Email + Notify By ICQ", "Check Email", "Email Signature", "Email Center"])),
          RMItem(title: "Phone - \"Follow Me\"", icon: "m_phone", children: stub(["Send Phone Call Request", "Find Phone# and Dial", "Update Phone \"Follow Me\" info"])),
          RMItem(title: "Message Archive", icon: "m_archive", children: [RMItem(title: "Open Message Archive", fn: { openArchive() })]),
-         RMItem(title: "ICQ White Pages", icon: "m_white", children: stub(["Search White Pages", "Find Users"])),
-         RMItem(title: "ICQ Active List", icon: "m_active", children: stub(["Show ICQ ActiveLists", "ICQ ActiveList Preferences"])),
+         RMItem(title: "ICQ White Pages", icon: "m_white", children: ["Search White Pages", "Find Users"].map { RMItem(title: $0, fn: { openFind() }) }),
+         RMItem(title: "ICQ Active List", icon: "m_active", children: [RMItem(title: "Show ICQ ActiveLists", fn: { openActive() }), RMItem(title: "ICQ ActiveList Preferences", fn: { openPrefs(1) })]),
          RMItem(title: "E-ICQ", icon: "m_eicq", children: stub(["E-ICQ Online", "E-ICQ Options"]))]
     }
     static func statusRItems() -> [RMItem] { Status.allCases.map { st in RMItem(title: st.menuLabel, icon: st.rawValue, checked: s.status == st, fn: { setStatus(st) }) } }
@@ -199,7 +231,7 @@ enum ICQ {
         popMenu([
             submenu("Email", list(["Send Email", "Send Email + Notify By ICQ", "-", "Check Email", "Email Signature", "Email Center"])),
             submenu("Phone", list(["Send Phone Call Request", "Find Phone# and Dial"])),
-            submenu("Random", list(["Find Random User", "-", "Available For Random Chat", "My Random Chat Settings"])),
+            submenu("Random", [MItem("Find Random User") { randomChat() }, NSMenuItem.separator()] + list(["Available For Random Chat", "My Random Chat Settings"])),
             MItem("Message Archive") { openArchive() },
         ])
     }

@@ -150,10 +150,11 @@ struct ContactEditView: View {
     @State private var email: String
     @State private var phone: String
     @State private var autoReply: Bool
-    static let size = CGSize(width: 360, height: 290)
+    @State private var notes: String
+    static let size = CGSize(width: 360, height: 360)
     init(uin: String) {
         self.uin = uin; let c = Store.shared.contact(uin)
-        _name = State(initialValue: c?.name ?? ""); _email = State(initialValue: c?.email ?? ""); _phone = State(initialValue: c?.phone ?? ""); _autoReply = State(initialValue: c?.autoReply ?? false)
+        _name = State(initialValue: c?.name ?? ""); _email = State(initialValue: c?.email ?? ""); _phone = State(initialValue: c?.phone ?? ""); _autoReply = State(initialValue: c?.autoReply ?? false); _notes = State(initialValue: c?.notes ?? "")
     }
     var body: some View {
         let c = Store.shared.contact(uin)
@@ -162,7 +163,8 @@ struct ContactEditView: View {
             Text("E-mail (\"Send Mail…\" opens your mail app):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? $0 : nil } ?? "name@example.com", text: $email)
             Text("Phone (FaceTime Video / Audio):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? nil : $0 } ?? "+49 151 1234567", text: $phone)
             if let b = c?.bridge { Text("iMessage address: \(b) (used when the fields stay empty)").foregroundColor(.hint).font(rf(10)).fixedSize(horizontal: false, vertical: true) }
-            if c?.isLive == true { RCheck(title: "Allow auto-reply when I am away (needs Auto-reply on in Preferences > Bridge)", on: $autoReply) }
+            Text("Notes (private, stay on this Mac):"); RText(text: $notes).frame(height: 54)
+            if c?.isLive == true, c?.isGroup != true { RCheck(title: "Allow auto-reply when I am away (needs Auto-reply on in Preferences > Bridge)", on: $autoReply) }
             Spacer(minLength: 0)
             HStack { Spacer()
                 RButton(title: "Cancel") { WinMgr.shared.close("edit" + uin) }
@@ -173,6 +175,7 @@ struct ContactEditView: View {
                         s.contacts[i].email = email.trimmingCharacters(in: .whitespaces).isEmpty ? nil : email.trimmingCharacters(in: .whitespaces)
                         s.contacts[i].phone = phone.trimmingCharacters(in: .whitespaces).isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces)
                         s.contacts[i].autoReply = autoReply ? true : nil
+                        s.contacts[i].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes
                         s.save()
                     }
                     WinMgr.shared.close("edit" + uin)
@@ -189,27 +192,36 @@ final class ConvModel: ObservableObject {
     @Published var picked = Set<String>()
     @Published var state = "Not loaded yet."
     private let s = Store.shared
-    func known(_ h: String) -> Bool { s.contacts.contains { $0.bridge.map { Bridge.same($0, h) || $0 == h } ?? false } }
+    private var groupNames: [String: String] = [:]
+    func known(_ h: String) -> Bool {
+        if h.hasPrefix("group:") { return s.contacts.contains { $0.bridge == h } }
+        return s.contacts.contains { !$0.isGroup && ($0.bridge.map { Bridge.same($0, h) || $0 == h } ?? false) }
+    }
     func load() {
         state = "Reading Messages…"
         DispatchQueue.global(qos: .userInitiated).async {
-            let list = Bridge.conversations(limit: 15)
+            let groups = self.s.showGroups ? Bridge.groups(limit: 10) : []
+            let list = (Bridge.conversations(limit: 15) + groups.map { Bridge.Conversation(handle: "group:" + $0.guid, last: $0.last, date: $0.date, count: 1) }).sorted { $0.date > $1.date }
+            for g in groups { self.groupNames["group:" + g.guid] = g.name }
             DispatchQueue.main.async {
                 self.convs = list; self.picked = Set(list.prefix(5).filter { !self.known($0.handle) }.map(\.handle))
                 if list.isEmpty { self.state = Bridge.checkAccess() == .ok ? "No conversations found." : "Messages cannot be read yet. Give this app Full Disk Access first, restart it and load again." }
                 let mine = self.s.contacts.compactMap(\.bridge)
-                Bridge.names(for: list.map(\.handle) + mine) { n in DispatchQueue.main.async {
-                    self.names = n
+                Bridge.names(for: list.map(\.handle).filter { !$0.hasPrefix("group:") } + mine.filter { !$0.hasPrefix("group:") }) { n in DispatchQueue.main.async {
+                    self.names = n.merging(self.groupNames) { a, _ in a }
                     // contacts added earlier under their number / address get the real name now
                     func bare(_ t: String) -> Bool { t.contains("@") || t.filter(\.isNumber).count >= 6 && t.filter(\.isLetter).isEmpty }
-                    for i in self.s.contacts.indices { if let h = self.s.contacts[i].bridge, bare(self.s.contacts[i].name), let nm = n.first(where: { Bridge.same($0.key, h) || $0.key == h })?.value { self.s.contacts[i].name = nm } }
+                    for i in self.s.contacts.indices { if let h = self.s.contacts[i].bridge, !h.hasPrefix("group:"), bare(self.s.contacts[i].name), let nm = n.first(where: { Bridge.same($0.key, h) || $0.key == h })?.value { self.s.contacts[i].name = nm } }
                     self.s.save()
                 } }
             }
         }
     }
     func importPicked() {
-        for c in convs where picked.contains(c.handle) && !known(c.handle) { _ = s.addBridgeContact(names[c.handle] ?? c.handle, handle: c.handle) }
+        for c in convs where picked.contains(c.handle) && !known(c.handle) {
+            if c.handle.hasPrefix("group:") { _ = s.addGroupContact(names[c.handle] ?? "Group", guid: String(c.handle.dropFirst(6))) }
+            else { _ = s.addBridgeContact(names[c.handle] ?? c.handle, handle: c.handle) }
+        }
         if !picked.isEmpty && !s.bridgeEnabled { s.bridgeEnabled = true; s.save(); s.startBridge() }
     }
 }
@@ -221,7 +233,7 @@ struct ConvList: View {
             if m.convs.isEmpty { Text(m.state).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
             ForEach(m.convs, id: \.handle) { c in
                 VStack(alignment: .leading, spacing: 1) {
-                    RCheck(title: (m.names[c.handle] ?? c.handle) + (m.names[c.handle] == nil ? "" : "  (\(c.handle))") + (m.known(c.handle) ? "  – already added" : ""),
+                    RCheck(title: (m.names[c.handle] ?? c.handle) + (c.handle.hasPrefix("group:") ? "  (group)" : (m.names[c.handle] == nil ? "" : "  (\(c.handle))")) + (m.known(c.handle) ? "  – already added" : ""),
                            on: Binding(get: { m.picked.contains(c.handle) }, set: { if $0 { m.picked.insert(c.handle) } else { m.picked.remove(c.handle) } }))
                     Text(c.last).font(rf(10)).foregroundColor(.hint).lineLimit(1).padding(.leading, 24)
                 }

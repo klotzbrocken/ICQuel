@@ -26,14 +26,17 @@ struct Contact: Identifiable, Codable, Hashable {
     var preset: String? = nil      // relationship preset id (see Presets); nil/"custom" = description only
     var bridge: String? = nil      // phone number / e-mail of an iMessage contact reached through the Messages bridge
     var email: String? = nil, phone: String? = nil   // optional details for "Send Mail" and FaceTime
+    var notes: String? = nil       // private notes about the contact (never sent anywhere)
     var autoReply: Bool? = nil     // may get an automatic away reply (needs Auto-reply on in Preferences > Bridge)
     var isLive: Bool { bridge != nil }
+    /// An iMessage group chat (bridge = "group:<chat guid>").
+    var isGroup: Bool { bridge?.hasPrefix("group:") == true }
     /// A made-up sample friend (neither an AI chatbot nor an iMessage contact): can be hidden in Preferences.
     var isDemo: Bool { persona == nil && bridge == nil }
     /// Address for "Send Mail": the e-mail field, or the iMessage handle when that is an e-mail address.
-    var mailAddr: String? { if let e = email, !e.isEmpty { return e }; if let b = bridge, b.contains("@") { return b }; return nil }
+    var mailAddr: String? { if let e = email, !e.isEmpty { return e }; if let b = bridge, !isGroup, b.contains("@") { return b }; return nil }
     /// Number / address for FaceTime: the phone field, or the iMessage handle.
-    var callTarget: String? { if let p = phone, !p.isEmpty { return p }; return bridge }
+    var callTarget: String? { if isGroup { return nil }; if let p = phone, !p.isEmpty { return p }; return bridge }
     var id: String { uin }
     var isBot: Bool { persona != nil }
     var isAssistant: Bool { assistant ?? false }
@@ -89,6 +92,8 @@ private struct Saved: Codable {
     var bridgeEnabled: Bool? = nil, bridgeLast: Int64? = nil
     var autoAway: Bool? = nil, autoAwayMin: Int? = nil, autoAwayDND: Bool? = nil
     var hideDemo: Bool? = nil, aiDraftIMessage: Bool? = nil, bridgeAutoAdd: Bool? = nil
+    var showGroups: Bool? = nil, showReceipts: Bool? = nil
+    var awayTexts: [String: String]? = nil
     var aiLocal: Bool? = nil, aiSummary: Bool? = nil, autoReplyOn: Bool? = nil, autoReplyText: String? = nil, autoReplyAI: Bool? = nil, autoReplied: [String: Double]? = nil
 }
 
@@ -170,6 +175,13 @@ final class Store: ObservableObject {
     @Published var autoAwayMin = 15
     @Published var autoAwayDND = false       // false = Away, true = Do Not Disturb
     @Published var hideDemo = false          // hide the made-up sample contacts
+    @Published var awayTexts: [String: String] = [:]   // my message per status (edited in the status message window)
+    static let defaultAway = ["away": "I'm away from my computer right now.", "na": "I'm not available. Please leave a message.", "occupied": "I'm busy right now – urgent messages only.",
+                              "dnd": "Please do not disturb.", "ffc": "I'm free for a chat!"]
+    func awayText(_ st: Status) -> String { awayTexts[st.rawValue] ?? Store.defaultAway[st.rawValue] ?? "" }
+    @Published var showGroups = false        // group chats can be imported and are shown (off by default)
+    @Published var showReceipts = true       // "delivered / read" under my last message
+    @Published var receipts: [String: String] = [:]
     @Published var bridgeAutoAdd = false     // new 1:1 iMessages from people that are not imported yet create a contact (off by default: privacy)
     @Published var aiDraftIMessage = false   // AI writes a reply DRAFT for incoming iMessages (never sent by the app)
     @Published var aiDrafts: [String: String] = [:]
@@ -233,7 +245,7 @@ final class Store: ObservableObject {
             aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; aiProvider = AIProvider(rawValue: s.aiProvider ?? "") ?? .anthropic; aiModels = s.aiModels ?? [:]; AIChat.provider = aiProvider; simpleMode = s.simpleMode ?? false
             botInit = s.botInit ?? true; botMin = s.botMin ?? 5; botMax = s.botMax ?? 20; opts = s.opts ?? MainOpts(); appName = s.appName ?? "ICQuel"; bridgeEnabled = s.bridgeEnabled ?? false; bridgeLast = s.bridgeLast ?? 0
             autoAway = s.autoAway ?? false; autoAwayMin = s.autoAwayMin ?? 15; autoAwayDND = s.autoAwayDND ?? false
-            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false
+            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false; showGroups = s.showGroups ?? false; awayTexts = s.awayTexts ?? [:]; showReceipts = s.showReceipts ?? true
             aiLocal = s.aiLocal ?? false; aiSummary = s.aiSummary ?? false; autoReplyOn = s.autoReplyOn ?? false; autoReplyAI = s.autoReplyAI ?? false
             if let t = s.autoReplyText, !t.isEmpty { autoReplyText = t }; autoReplied = s.autoReplied ?? [:]
             AIChat.useLocal = aiLocal
@@ -254,7 +266,7 @@ final class Store: ObservableObject {
     }
     func save() {
         let s = Saved(uin: uin, nick: nick, status: status, sounds: sounds, contacts: contacts, freqEnabled: freqEnabled,
-                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
+                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, showGroups: showGroups, showReceipts: showReceipts, awayTexts: awayTexts, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
         if let d = try? JSONEncoder().encode(s) { Persist.write(d) }
     }
     static func newUin() -> String { String(Int.random(in: 10_000_000...99_999_999)) }
@@ -389,6 +401,11 @@ final class Store: ObservableObject {
     // MARK: Messages bridge
     private var bridgeTimer: Timer?
     private var polling = false
+    /// "✓ Delivered" / "✓✓ Read 14:05" under my newest message.
+    static func receiptText(_ state: Int, _ date: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "d MMM HH:mm"
+        return state == 2 ? "✓✓ Read " + f.string(from: date) : (state == 1 ? "✓ Delivered" : "Sent")
+    }
     func startBridge() {
         bridgeTimer?.invalidate(); bridgeTimer = nil
         guard bridgeEnabled else { bridgeStatus = "Off"; return }
@@ -409,11 +426,16 @@ final class Store: ObservableObject {
             // Messages marks a message read within seconds when its window is open: only messages that have been shown here for 2 minutes are synced
             guard let h = c.bridge, let q = unread[c.uin], !q.isEmpty, q.allSatisfy({ Date().timeIntervalSince($0.t) > 120 }) else { return nil }; return (c.uin, h, q.count)
         }
+        // 1:1 chats whose newest message is mine: look up delivered / read
+        let wantReceipts = showReceipts ? contacts.compactMap { c -> (String, String)? in
+            guard let h = c.bridge, !c.isGroup, history[c.uin]?.last?.dir == "out" else { return nil }; return (c.uin, h) } : []
         DispatchQueue.global(qos: .utility).async {
             let msgs = Bridge.incoming(after: after)
             let states = pending.map { ($0.0, Bridge.unreadAmongLatest(handle: $0.1, n: $0.2)) }
+            let rc: [(String, (state: Int, date: Date)?)] = wantReceipts.map { ($0.0, Bridge.receipt(handle: $0.1)) }
             DispatchQueue.main.async {
                 self.polling = false
+                for (u, r) in rc { if let r { self.receipts[u] = Store.receiptText(r.state, r.date) } else { self.receipts[u] = nil } }
                 // read in the Messages app (on this Mac or another device) = read here as well
                 var changed = false
                 for (u, k) in states { if let cur = self.unread[u]?.count, k < cur { self.unread[u] = k == 0 ? nil : Array(self.unread[u]!.suffix(k)); changed = true } }
@@ -422,7 +444,12 @@ final class Store: ObservableObject {
                 self.bridgeLast = top; self.save()
                 var touched: [Contact] = []
                 for m in msgs {
-                    var contact = self.contacts.first(where: { $0.bridge.map { Bridge.same($0, m.handle) } ?? false })
+                    if m.group {   // group messages only go to the matching group chat, never into someone's 1:1 chat
+                        guard self.showGroups, let g = m.chatGuid, let gc = self.contacts.first(where: { $0.bridge == "group:" + g }) else { continue }
+                        self.deliver(to: gc, text: self.groupText(m.handle, m.text, mine: false), files: m.files.isEmpty ? nil : m.files)
+                        continue
+                    }
+                    var contact = self.contacts.first(where: { !$0.isGroup && ($0.bridge.map { Bridge.same($0, m.handle) } ?? false) })
                     if contact == nil, self.bridgeAutoAdd, m.imessage, !m.group, !m.handle.isEmpty {   // a new sender: create the contact (named from your Contacts if possible)
                         contact = self.addBridgeContact(m.handle, handle: m.handle, importRecent: false)
                         if let c = contact { self.nameFromContacts(c) }
@@ -436,7 +463,7 @@ final class Store: ObservableObject {
     /// AI reply draft for an iMessage contact (only if switched on in Preferences > AI Chat): stored as text for the reply window, never sent.
     func prepareDraft(for c: Contact, force: Bool = false) {
         if force && !aiEnabled { notice("Turn on AI Chat in Preferences first."); return }
-        guard aiEnabled, force || (aiDraftIMessage && c.isLive), !drafting.contains(c.uin) else { return }
+        guard aiEnabled, !c.isGroup, force || (aiDraftIMessage && c.isLive), !drafting.contains(c.uin) else { return }
         withEngine(retry: { self.prepareDraft(for: c, force: force) }) {
         if force { regen.insert(c.uin) }   // the send window replaces its text with this draft
         drafting.insert(c.uin)
@@ -469,7 +496,10 @@ final class Store: ObservableObject {
         guard let h = c.bridge, AutoReplyRule.allows(enabled: autoReplyOn, quiet: quiet, contactAllowed: c.autoReply == true, imessage: m.imessage, group: m.group,
                                                    msgDate: m.date, statusSince: statusSince, lastReply: autoReplied[c.uin], now: now) else { return }
         autoReplied[c.uin] = now; save()
-        let fallback = autoReplyText, statusText = status.menuLabel, me = nick
+        // my own message for this status (edited in the status window) is what people get; otherwise the text from Preferences > Privacy
+        var fallback = awayTexts[status.rawValue] ?? autoReplyText
+        if !fallback.lowercased().contains("automatic reply") { fallback += " (automatic reply)" }
+        let statusText = status.menuLabel, me = nick
         func send(_ t: String) {
             Bridge.send(t, to: h) { err in DispatchQueue.main.async {
                 if let err { notice("The automatic reply to \(c.name) could not be sent:\n\(err)") } else { self.log(c.uin, "out", "↩︎ " + t) }
@@ -517,9 +547,36 @@ final class Store: ObservableObject {
         if importRecent { DispatchQueue.global(qos: .utility).async {      // fill the history with the last 5 iMessages (needs Full Disk Access; silently skipped otherwise)
             let recent = Bridge.recent(handle: h, limit: 5)
             guard !recent.isEmpty else { return }
-            DispatchQueue.main.async { self.history[c.uin] = recent.map { Msg(dir: $0.fromMe ? "out" : "in", text: $0.text, t: $0.date) }; self.save() }
+            DispatchQueue.main.async { self.history[c.uin] = recent.map { Msg(dir: $0.fromMe ? "out" : "in", text: $0.text, t: $0.date, files: $0.files.isEmpty ? nil : $0.files) }; self.save() }
         } }
         return c
+    }
+
+    /// An explicit user action (Forward, Request Chat): writes `text` (and files) to a contact like the send window does.
+    func sendText(to uin: String, _ text: String, files: [String] = []) {
+        if !text.isEmpty { log(uin, "out", text); Sound.play("msgsent"); botReply(uin) }
+        if !files.isEmpty { attachments[uin] = files.map { URL(fileURLWithPath: $0) }; sendAttachments(uin) }
+    }
+    /// A group chat as a contact (bridge = "group:<guid>"); the last 5 messages are loaded, incoming ones prefixed with the sender.
+    @discardableResult func addGroupContact(_ name: String, guid: String) -> Contact? {
+        let key = "group:" + guid
+        guard !contacts.contains(where: { $0.bridge == key }) else { return nil }
+        let c = Contact(name: name, uin: Store.newUin(), bridge: key)
+        contacts.append(c); online.insert(c.uin); save()
+        DispatchQueue.global(qos: .utility).async {
+            let recent = Bridge.recentGroup(guid: guid, limit: 5)
+            guard !recent.isEmpty else { return }
+            DispatchQueue.main.async {
+                self.history[c.uin] = recent.map { Msg(dir: $0.fromMe ? "out" : "in", text: self.groupText($0.from, $0.text, mine: $0.fromMe), t: $0.date, files: $0.files.isEmpty ? nil : $0.files) }; self.save()
+            }
+        }
+        return c
+    }
+    /// "Sender: text" for group messages (sender named from the contact list, else the handle).
+    func groupText(_ handle: String, _ text: String, mine: Bool) -> String {
+        if mine || handle.isEmpty { return text }
+        let who = contacts.first(where: { !$0.isGroup && ($0.bridge.map { Bridge.same($0, handle) } ?? false) })?.name ?? handle
+        return text.isEmpty ? "" : who + ": " + text
     }
 
     // MARK: chatbots that write first, at randomised intervals

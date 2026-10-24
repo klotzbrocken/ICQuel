@@ -128,7 +128,7 @@ struct ModernMain: View {
             }.background(Color(nsColor: .textBackgroundColor)).overlay(Rectangle().stroke(Color(white: 0.7)))
             if o.mButtons { HStack(spacing: 6) {
                 bigButton("person.badge.plus", "Add Users") { ICQ.openAdd() }
-                bigButton("magnifyingglass", "Find") { comingSoon() }
+                bigButton("magnifyingglass", "Find") { ICQ.openFind() }
                 bigButton("questionmark.circle.fill", "Help") { ICQ.openAbout() }
             } }
         }.padding(10).frame(width: ModernMain.size.width, height: ModernMain.size.height)
@@ -180,6 +180,7 @@ struct SessionView: View {
                             if let f = m.files, !f.isEmpty { if m.text.isEmpty { (Text("[\(hhmm(m.t))] ").foregroundColor(col) + Text(mine ? s.uin : c.name).fontWeight(mine ? .regular : .bold).foregroundColor(col) + Text(":").foregroundColor(col)) }; AttachList(files: f) }
                             }
                         }
+                        if s.showReceipts, h.last?.dir == "out", let r = s.receipts[uin] { Text(r).font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .trailing) }
                         Color.clear.frame(height: 1).id("end")
                     }.padding(10)
                 }.background(Color(nsColor: .textBackgroundColor)).overlay(Rectangle().stroke(Color(white: 0.7)))
@@ -213,6 +214,7 @@ struct ModernAbout: View {
             Text(App.name).font(.title.weight(.semibold))
             Text("Version 99b (Build 2569) – Modern Mac theme"); Text("Network connection: coming soon.").foregroundColor(.secondary)
             Text("Spring water, flowing chats.").font(.caption).foregroundColor(.secondary)
+            Text("GIF search powered by GIPHY").font(.caption).foregroundColor(.secondary).onTapGesture { NSWorkspace.shared.open(URL(string: "https://giphy.com")!) }
             Button("OK") { WinMgr.shared.close("about") }.keyboardShortcut(.defaultAction).padding(.top, 6)
         }.padding(20).frame(width: ModernAbout.size.width, height: ModernAbout.size.height)
     }
@@ -258,14 +260,13 @@ struct ModernAway: View {
     static let size = CGSize(width: 380, height: 230)
     init(status: Status) {
         self.status = status
-        _msg = State(initialValue: ["away": "I'm away from my computer right now.", "na": "I'm not available. Please leave a message.", "occupied": "I'm busy right now – urgent messages only.",
-                                    "dnd": "Please do not disturb.", "ffc": "I'm free for a chat!"][status.rawValue] ?? "")
+        _msg = State(initialValue: Store.shared.awayText(status))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Status message for “\(status.menuLabel)”").font(.headline)
             Text("This message is shown to your contacts while you are in this mode.").font(.caption).foregroundColor(.secondary)
-            TextEditor(text: $msg).overlay(Rectangle().stroke(Color(white: 0.7))).frame(height: 90)
+            TextEditor(text: $msg).overlay(Rectangle().stroke(Color(white: 0.7))).frame(height: 90).onChange(of: msg) { Store.shared.awayTexts[status.rawValue] = $0; Store.shared.save() }
             HStack { Spacer(); Button("OK") { WinMgr.shared.close("away") }.keyboardShortcut(.defaultAction) }
         }.padding(16).frame(width: ModernAway.size.width, height: ModernAway.size.height)
     }

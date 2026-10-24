@@ -14,7 +14,15 @@ enum Attach {
         let d = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0].appendingPathComponent("ICQuel", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true); return d
     }
-    static func add(_ uin: String, _ u: URL) { DispatchQueue.main.async { Store.shared.attachments[uin, default: []].append(u) } }
+    /// Messages refuses attachments above ~100 MB.
+    static let maxBytes = 100 * 1_000_000
+    static func add(_ uin: String, _ u: URL) {
+        let size = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        DispatchQueue.main.async {
+            if size > maxBytes { notice("\(u.lastPathComponent) is larger than 100 MB and cannot be sent."); return }
+            Store.shared.attachments[uin, default: []].append(u)
+        }
+    }
 
     static func pickFile(_ uin: String) {
         let p = NSOpenPanel(); p.canChooseFiles = true; p.canChooseDirectories = false; p.allowsMultipleSelection = false
@@ -61,6 +69,10 @@ enum Attach {
         var c = URLComponents(string: q.isEmpty ? "https://api.giphy.com/v1/gifs/trending" : "https://api.giphy.com/v1/gifs/search")!
         c.queryItems = [.init(name: "api_key", value: key), .init(name: "limit", value: "12"), .init(name: "rating", value: "pg-13")] + (q.isEmpty ? [] : [.init(name: "q", value: q)])
         let (d, _) = try await URLSession.shared.data(from: c.url!)
+        return try parseHits(d)
+    }
+    /// Hits of a Giphy search/trending response; throws the API error (pure: covered by SelfTest). A rejected key is forgotten.
+    static func parseHits(_ d: Data) throws -> [GifHit] {
         let root = try JSONSerialization.jsonObject(with: d) as? [String: Any]
         if let st = (root?["meta"] as? [String: Any])?["status"] as? Int, st != 200 {
             if st == 401 || st == 403 { UserDefaults.standard.removeObject(forKey: "giphyKey") }
@@ -134,7 +146,7 @@ struct GifPicker: View {
                 }
                 if hits.isEmpty && !busy { Text("No results.").foregroundColor(.hint).padding(.top, 20) }
             }
-            HStack { Text(busy ? "Loading…" : "Click a GIF to attach it.").foregroundColor(.hint); Spacer(); RButton(title: "Cancel") { WinMgr.shared.close("gif") } }
+            HStack { Text(busy ? "Loading…" : "Click a GIF to attach it.").foregroundColor(.hint); Spacer(); Text("Powered by GIPHY").underline().foregroundColor(.hint).onTapGesture { NSWorkspace.shared.open(URL(string: "https://giphy.com")!) }.help("giphy.com"); Spacer(); RButton(title: "Cancel") { WinMgr.shared.close("gif") } }
         }.padding(12).frame(width: GifPicker.size.width, height: GifPicker.size.height, alignment: .topLeading).onAppear { load() }
     }
 }
@@ -142,10 +154,17 @@ struct GifPicker: View {
 /// Pictures / GIFs shown inline, other files as a clickable file row (icon + name).
 struct AttachList: View {
     let files: [String]; var maxW: CGFloat = 240
+    private static let cache = NSCache<NSString, NSImage>()
+    /// Decoded pictures are kept: chat windows redraw often.
+    static func image(_ path: String) -> NSImage? {
+        if let i = cache.object(forKey: path as NSString) { return i }
+        guard let i = NSImage(contentsOfFile: path) else { return nil }
+        cache.setObject(i, forKey: path as NSString); return i
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(files, id: \.self) { f in
-                let u = URL(fileURLWithPath: f), img = NSImage(contentsOfFile: f)
+                let u = URL(fileURLWithPath: f), img = AttachList.image(f)
                 if let img, (UTType(filenameExtension: u.pathExtension)?.conforms(to: .image) ?? false), img.size.width > 0 {
                     let w = min(maxW, img.size.width), h = w * img.size.height / img.size.width
                     InlineImage(path: f).frame(width: w, height: min(h, 260)).onTapGesture { NSWorkspace.shared.open(u) }
