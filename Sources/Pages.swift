@@ -160,11 +160,11 @@ struct ContactEditView: View {
         let c = Store.shared.contact(uin)
         VStack(alignment: .leading, spacing: 6) {
             Text("Nickname:"); RField(text: $name)
-            Text("E-mail (\"Send Mail…\" opens your mail app):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? $0 : nil } ?? "name@example.com", text: $email)
-            Text("Phone (FaceTime Video / Audio):"); RField(placeholder: c?.bridge.flatMap { $0.contains("@") ? nil : $0 } ?? "+49 151 1234567", text: $phone)
-            if let b = c?.bridge { Text("iMessage address: \(b) (used when the fields stay empty)").foregroundColor(.hint).font(rf(10)).fixedSize(horizontal: false, vertical: true) }
+            Text("E-mail (\"Send Mail…\" opens your mail app):"); RField(placeholder: c.flatMap { $0.isIM && !$0.isGroup ? $0.bridge : nil }.flatMap { $0.contains("@") ? $0 : nil } ?? "name@example.com", text: $email)
+            Text("Phone (FaceTime Video / Audio):"); RField(placeholder: c.flatMap { $0.isIM && !$0.isGroup ? $0.bridge : ($0.waJid.map(WAProtocol.number)) }.flatMap { $0.contains("@") ? nil : $0 } ?? "+49 151 1234567", text: $phone)
+            if let b = c?.bridge, c?.isGroup != true { Text((c?.isWA == true ? "WhatsApp number: \(WAProtocol.number(c?.waJid ?? ""))" : "iMessage address: \(b)") + " (used when the fields stay empty)").foregroundColor(.hint).font(rf(10)).fixedSize(horizontal: false, vertical: true) }
             Text("Notes (private, stay on this Mac):"); RText(text: $notes).frame(height: 54)
-            if c?.isLive == true, c?.isGroup != true { RCheck(title: "Allow auto-reply when I am away (needs Auto-reply on in Preferences > Bridge)", on: $autoReply) }
+            if c?.isIM == true, c?.isGroup != true { RCheck(title: "Allow auto-reply when I am away (needs Auto-reply on in Preferences > Bridge)", on: $autoReply) }
             Spacer(minLength: 0)
             HStack { Spacer()
                 RButton(title: "Cancel") { WinMgr.shared.close("edit" + uin) }
@@ -239,6 +239,47 @@ struct ConvList: View {
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .topLeading).padding(8) } }
+    }
+}
+/// Import window for WhatsApp chats (from the helper's list of recent chats).
+final class WAImportModel: ObservableObject {
+    @Published var chats: [WAChat] = []
+    @Published var picked = Set<String>()
+    @Published var state = "Loading chats…"
+    private let s = Store.shared
+    func known(_ jid: String) -> Bool { s.contacts.contains { $0.bridge == "wa:" + jid } }
+    func load() {
+        WABridge.shared.chats { c in
+            let list = c.filter { !$0.group || self.s.showGroups }.sorted { $0.date > $1.date }.prefix(40)
+            self.chats = Array(list)
+            self.state = list.isEmpty ? (WABridge.shared.state == .ready ? "No chats yet. Chats appear here after the first sync or when a message arrives; try again in a minute." : "WhatsApp is not connected (Preferences > Privacy).") : ""
+        }
+    }
+    func importPicked() { for c in chats where picked.contains(c.jid) && !known(c.jid) { s.addWAContact(c.name.isEmpty ? WAProtocol.number(c.jid) : c.name, jid: c.jid) } }
+}
+struct WAImportView: View {
+    static let size = CGSize(width: 440, height: 440)
+    @StateObject private var m = WAImportModel()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Choose the WhatsApp chats to show as contacts. Only the ones you tick are shown; all other chats are ignored.").fixedSize(horizontal: false, vertical: true)
+            Sunken { ScrollView { VStack(alignment: .leading, spacing: 5) {
+                if !m.state.isEmpty { Text(m.state).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
+                ForEach(m.chats, id: \.jid) { c in
+                    VStack(alignment: .leading, spacing: 1) {
+                        RCheck(title: (c.name.isEmpty ? WAProtocol.number(c.jid) : c.name) + (c.group ? "  (group)" : "") + (m.known(c.jid) ? "  – already added" : ""),
+                               on: Binding(get: { m.picked.contains(c.jid) }, set: { if $0 { m.picked.insert(c.jid) } else { m.picked.remove(c.jid) } }))
+                        Text(c.last).font(rf(10)).foregroundColor(.hint).lineLimit(1).padding(.leading, 24)
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .topLeading).padding(8) } }.frame(maxHeight: .infinity)
+            HStack {
+                RButton(title: "Reload") { m.load() }
+                Spacer()
+                RButton(title: "Cancel") { WinMgr.shared.close("waimport") }
+                RButton(title: "Import", isDefault: true) { m.importPicked(); WinMgr.shared.close("waimport") }.disabled(m.picked.isEmpty)
+            }
+        }.padding(14).frame(width: WAImportView.size.width, height: WAImportView.size.height, alignment: .topLeading).onAppear { m.load() }
     }
 }
 struct MessagesImportView: View {

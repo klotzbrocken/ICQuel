@@ -125,13 +125,14 @@ struct MainView: View {
 
     // MARK: contact list box (with its own scroll bar in advanced mode)
     func list(simple: Bool, w boxW: CGFloat, h listH: CGFloat) -> some View {
-        let live = s.contacts.filter(\.isLive).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let live = s.contacts.filter(\.isIM).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let wa = s.contacts.filter(\.isWA).sorted { $0.name.lowercased() < $1.name.lowercased() }
         let bots = s.contacts.filter(\.isBot).sorted { $0.name.lowercased() < $1.name.lowercased() }
         let shown: (Contact) -> Bool = { !$0.isLive && !$0.isBot && !(s.hideDemo && $0.isDemo) }
         let on = s.contacts.filter { shown($0) && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
         let o = s.opts
         let off = o.showOffline ? s.contacts.filter { c in shown(c) && !on.contains(c) }.sorted { $0.name.lowercased() < $1.name.lowercased() } : []
-        let flatList = on + (o.showIMessage ? live : []) + bots + off   // flat lists (Simple mode, User tab) honour the same options
+        let flatList = on + (o.showIMessage ? live : []) + wa + bots + off   // flat lists (Simple mode, User tab) honour the same options
         let viewH = listH - 4, track = listH - 4 - 32
         let needsBar = !simple && scroll.content > viewH                  // scroll bar only when the list does not fit
         let barW: CGFloat = needsBar ? 15 : 0, contentW = boxW - 4 - barW
@@ -142,7 +143,7 @@ struct MainView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 0) {
                     if simple {
-                        ForEach(flatList) { row($0, offline: !(on + live + bots).contains($0)) }
+                        ForEach(flatList) { row($0, offline: !(on + live + wa + bots).contains($0)) }
                         let sb = CGFloat(1 + [o.btnInstructions, s.bridgeEnabled, o.btnRandom, o.btnWeb, o.btnCool].filter { $0 }.count)
                         Color.clear.frame(height: max(0, viewH - CGFloat(20 * flatList.count) - (sb * 15 + (sb - 1) * 2 + 10)))   // button block sits at the bottom of the list
                         VStack(spacing: 2) {
@@ -156,14 +157,15 @@ struct MainView: View {
                     } else if tab == 0 {
                         header("Online"); ForEach(on) { row($0, offline: false) }
                         if o.showIMessage { header("iMessage"); ForEach(live) { row($0, offline: false) } }
+                        if !wa.isEmpty { header("WhatsApp"); ForEach(wa) { row($0, offline: false) } }
                         if !bots.isEmpty { header("Robot"); ForEach(bots) { row($0, offline: false) } }
                         if o.showOffline { header("Offline"); ForEach(off) { row($0, offline: true) } }
                     } else {
-                        ForEach(flatList.sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live + bots).contains(c)) }
+                        ForEach(flatList.sorted { $0.name.lowercased() < $1.name.lowercased() }) { c in row(c, offline: !(on + live + wa + bots).contains(c)) }
                     }
                     if !simple {
                         // the button block sits at the bottom of the list: hidden rows/buttons never leave gaps below it
-                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + bots.count + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (bots.isEmpty ? 0 : 1) + (o.showOffline ? 1 : 0)) : 20 * (on.count + live.count + bots.count + off.count)
+                        let rows = tab == 0 ? 20 * (on.count + (o.showIMessage ? live.count : 0) + wa.count + bots.count + off.count) + 17 * (1 + (o.showIMessage ? 1 : 0) + (wa.isEmpty ? 0 : 1) + (bots.isEmpty ? 0 : 1) + (o.showOffline ? 1 : 0)) : 20 * (on.count + live.count + wa.count + bots.count + off.count)
                         let flags: [Bool] = [o.btnInstructions, o.btnRandom, o.btnWeb, o.btnCool, s.bridgeEnabled]
                         let nb = CGFloat(1 + flags.filter { $0 }.count)
                         Color.clear.frame(height: max(0, viewH - CGFloat(rows) - (nb * 15 + (nb - 1) * 2 + 10)))

@@ -59,6 +59,7 @@ struct ArchiveView: View {
 }
 struct PrefsView: View {
     @ObservedObject var s = Store.shared
+    @ObservedObject var wa = WABridge.shared
     @State var tab: Int
     @State private var nick = Store.shared.nick
     @State private var uin = Store.shared.uin
@@ -97,7 +98,7 @@ struct PrefsView: View {
     @State private var optModern = Theme.isModern
     @State private var bridgeMsg = ""
     /// Retro window height per page, so there are no large empty grey areas.
-    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 720, 6: 520, 7: 400, 8: 620]
+    static let heights: [Int: CGFloat] = [0: 375, 1: 440, 2: 480, 3: 470, 4: 530, 5: 780, 6: 520, 7: 400, 8: 620]
     static let icons: [(String, Color)] = [("person.crop.circle.fill", .blue), ("person.2.fill", .green), ("tray.and.arrow.down.fill", .orange), ("text.bubble.fill", .teal), ("speaker.wave.2.fill", .pink),
                                            ("lock.fill", .gray), ("sparkles", .purple), ("macwindow", .indigo), ("message.badge.filled.fill", Color(red: 0.2, green: 0.78, blue: 0.35))]
     /// The first page grows with the number of installed themes (+ room for the fan-made note).
@@ -268,6 +269,21 @@ struct PrefsView: View {
                 RCheck(title: "Show delivered / read status under my last message", on: Binding(get: { s.showReceipts }, set: { s.showReceipts = $0; s.save() })).padding(.top, 4)
                 note("Read from the Messages database on this Mac; nobody is told anything.")
             }.padding(.top, 6)
+            RGroup(title: "WhatsApp (experimental)") {
+                note("Links ICQuel like WhatsApp Web, through an open-source library. WhatsApp offers no official way to do this for a personal account and may block accounts that use unofficial clients; a second phone number is safer. Only chats you import are shown, all others are ignored. Nothing is ever sent automatically.")
+                RCheck(title: "Use WhatsApp", on: Binding(get: { s.waEnabled }, set: { v in
+                    if !v { WABridge.shared.stop(); s.waEnabled = false; s.save(); return }
+                    retroBox("Use WhatsApp (experimental)?", "ICQuel will connect to WhatsApp like WhatsApp Web, in your name. This is unofficial and WhatsApp may block the account. A second number is safer.\n\nYou link it once by scanning a QR code in WhatsApp > Linked devices. ICQuel downloads the Node.js runtime once from nodejs.org (about 45 MB).\n\nDo you want to continue?", icon: "question32", buttons: ["Yes, enable", "Cancel"]) { if $0 == 0 { s.waEnabled = true; s.save(); WABridge.shared.start(userInitiated: true) } }
+                }))
+                if s.waEnabled { Text("Status: " + wa.statusText).foregroundColor(.hint).fixedSize(horizontal: false, vertical: true) }
+                if let q = wa.qr { Image(nsImage: q).interpolation(.none).resizable().frame(width: 190, height: 190).padding(.vertical, 4) }
+                if s.waEnabled {
+                    HStack {
+                        RButton(title: "Import chats…", minWidth: 110) { ICQ.openWAImport() }
+                        RButton(title: "Unlink", minWidth: 70) { retroBox("Unlink WhatsApp?", "ICQuel logs out of WhatsApp and forgets the link. Imported chats stay in the list.", icon: "question32", buttons: ["Unlink", "Cancel"]) { if $0 == 0 { WABridge.shared.logout() } } }
+                    }
+                }
+            }.padding(.top, 6)
             RGroup(title: "AI service and key") {
                 HStack(spacing: 6) {
                     Text("Service:")
@@ -316,7 +332,7 @@ struct PrefsView: View {
             RButton(title: "Import from Messages…", minWidth: 170) { ICQ.openMessagesImport() }.padding(.top, 2)
             RGroup(title: "Connected iMessage contacts") {
                 Sunken { ScrollView { VStack(spacing: 0) {
-                    ForEach(s.contacts.filter(\.isLive)) { c in
+                    ForEach(s.contacts.filter(\.isIM)) { c in
                         HStack(spacing: 4) { Pix(name: "online", w: 16); Text("\(c.name)  (\(c.bridge ?? ""))").foregroundColor(bridgeSel == c.uin ? .white : Color.ink); Spacer() }
                             .padding(.horizontal, 4).frame(height: 18).background(bridgeSel == c.uin ? Color.navy : Color.clear)
                             .contentShape(Rectangle()).onTapGesture { bridgeSel = c.uin }

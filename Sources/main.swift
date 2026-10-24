@@ -21,7 +21,7 @@ enum ICQ {
             if !s.contacts.contains(where: { !$0.isLive && !$0.isBot }) { s.contacts += seedContacts.map { Contact(name: $0, uin: Store.newUin()) }; s.save() }
         }
         s.simulatePresence(); if s.status == .offline { s.status = .online }
-        openMain(); Sound.play("startup"); s.resetSched(); s.startBots(); s.startBridge(); s.startIdleWatch(); offerMessagesImport(); if s.freqEnabled && s.demoFirst { s.startDemoFirst() }
+        openMain(); Sound.play("startup"); s.resetSched(); s.startBots(); s.startBridge(); WABridge.shared.onMessage = { s.waIncoming($0) }; WABridge.shared.startIfEnabled(); s.startIdleWatch(); offerMessagesImport(); if s.freqEnabled && s.demoFirst { s.startDemoFirst() }
         refreshTray()
     }
     static func openMain() {
@@ -61,6 +61,10 @@ enum ICQ {
         WinMgr.shared.close("msgimport")
         WinMgr.shared.open("msgimport", "Import from Messages", MessagesImportView.size.width, MessagesImportView.size.height) { MessagesImportView() }
     }
+    static func openWAImport() {
+        WinMgr.shared.close("waimport")
+        WinMgr.shared.open("waimport", "Import from WhatsApp", WAImportView.size.width, WAImportView.size.height) { WAImportView() }
+    }
     static func openContactEdit(_ uin: String) {
         WinMgr.shared.close("edit" + uin)
         WinMgr.shared.open("edit" + uin, "Edit Contact", ContactEditView.size.width, ContactEditView.size.height) { ContactEditView(uin: uin) }
@@ -92,7 +96,7 @@ enum ICQ {
     }
     /// Forward / Request Chat: asks first, then sends exactly like the send window would.
     static func forward(_ text: String, files: [String], from uin: String) {
-        let targets = s.contacts.filter { $0.uin != uin && (!$0.isLive || s.bridgeEnabled) }
+        let targets = s.contacts.filter { $0.uin != uin && (!$0.isLive || ($0.isWA ? s.waEnabled : s.bridgeEnabled)) }
         guard !targets.isEmpty, !(text.isEmpty && files.isEmpty) else { NSSound.beep(); return }
         popMenu(targets.map { c in MItem("Forward to " + c.name) {
             retroBox("Forward message?", "Send this message to \(c.name)?", icon: "question32", buttons: ["Send", "Cancel"]) { if $0 == 0 { s.sendText(to: c.uin, text, files: files) } }
@@ -281,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let st = Status(rawValue: u.lastPathComponent.lowercased()), !Store.shared.uin.isEmpty { Store.shared.status = st; Store.shared.save(); ICQ.refreshTray() }
         }
     }
+    func applicationWillTerminate(_ n: Notification) { WABridge.shared.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows f: Bool) -> Bool {
         if !f { ICQ.tray?.isVisible == true ? ICQ.openMain() : ICQ.start() }

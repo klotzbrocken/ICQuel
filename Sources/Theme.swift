@@ -78,11 +78,13 @@ struct ModernMain: View {
     @State private var openOn = true
     @State private var openOff = true
     @State private var openIM = true
+    @State private var openWA = true
     @State private var openBots = true
     static let size = CGSize(width: 272, height: 560)
     var body: some View {
         let o = s.opts
-        let live = s.contacts.filter(\.isLive).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let live = s.contacts.filter(\.isIM).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let wa = s.contacts.filter(\.isWA).sorted { $0.name.lowercased() < $1.name.lowercased() }
         let bots = s.contacts.filter(\.isBot).sorted { $0.name.lowercased() < $1.name.lowercased() }
         let shown: (Contact) -> Bool = { !$0.isLive && !$0.isBot && !(s.hideDemo && $0.isDemo) }
         let on = s.contacts.filter { shown($0) && s.status != .offline && s.online.contains($0.uin) }.sorted { $0.name.lowercased() < $1.name.lowercased() }
@@ -122,6 +124,7 @@ struct ModernMain: View {
                 VStack(alignment: .leading, spacing: 0) {
                     group("Online", on.count, $openOn); if openOn { ForEach(on) { row($0, offline: false) } }
                     if o.mIMessage { group("iMessage", live.count, $openIM).padding(.top, 4); if openIM { ForEach(live) { row($0, offline: false) }; if s.bridgeEnabled { Button("Import from Messages…") { ICQ.openMessagesImport() }.buttonStyle(.link).padding(.leading, 22).padding(.vertical, 3) } } }
+                    if !wa.isEmpty { group("WhatsApp", wa.count, $openWA).padding(.top, 4); if openWA { ForEach(wa) { row($0, offline: false) } } }
                     if !bots.isEmpty { group("Robot", bots.count, $openBots).padding(.top, 4); if openBots { ForEach(bots) { row($0, offline: false) } } }
                     if o.mOffline { group("Offline", off.count, $openOff).padding(.top, 4); if openOff { ForEach(off) { row($0, offline: true) } } }
                 }.padding(6).frame(maxWidth: .infinity, alignment: .leading)

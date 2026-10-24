@@ -1,6 +1,9 @@
 #if DEBUG
 import AppKit
 import SQLite3
+import AVFoundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Debug builds only: `ICQ_SELFTEST=1 <app>/Contents/MacOS/ICQuel` (tools/test.sh) runs these checks against the real code, prints a summary and exits non-zero on any failure.
 enum SelfTest {
@@ -10,7 +13,7 @@ enum SelfTest {
         if !ok { failures += 1; print("FAIL (SelfTest.swift:\(line)): \(what)") }
     }
     static func run() {
-        bridge(); options(); autoReply(); ai(); giphy(); chatDB(); features()
+        bridge(); options(); autoReply(); ai(); giphy(); chatDB(); features(); whatsapp()
         print("selftest: \(checks) checks, \(failures) failed")
         exit(failures == 0 ? 0 : 1)
     }
@@ -145,6 +148,79 @@ enum SelfTest {
         st.awayTexts["away"] = "Back at 5"; check(st.awayText(.away) == "Back at 5", "own away message wins"); st.awayTexts["away"] = nil
         st.sounds = true; st.showGroups = false
         check(st.groupText("+4915", "hi", mine: true) == "hi" && st.groupText("+4915", "hi", mine: false) == "+4915: hi" && st.groupText("+4915", "", mine: false) == "", "group text gets a sender prefix")
+    }
+
+    static func whatsapp() {
+        // protocol lines as the helper prints them
+        if case .qr(let q)? = WAProtocol.parse(#"{"type":"qr","data":"2@abc"}"#) { check(q == "2@abc", "qr event") } else { check(false, "qr event parsed") }
+        if case .message(let m)? = WAProtocol.parse(#"{"type":"message","id":"A1","jid":"49151@s.whatsapp.net","from":"49151@s.whatsapp.net","name":"Anna","text":"hi","group":false,"ts":1700000000,"fromMe":false,"files":["/tmp/x.jpg"]}"#) {
+            check(m.text == "hi" && m.name == "Anna" && m.files == ["/tmp/x.jpg"] && !m.fromMe && m.date.timeIntervalSince1970 == 1700000000, "message event")
+        } else { check(false, "message event parsed") }
+        if case .chats(let c)? = WAProtocol.parse(#"{"type":"chats","chats":[{"jid":"1@g.us","name":"Team","group":true,"last":"yo","ts":5},{"name":"no jid"}]}"#) { check(c.count == 1 && c[0].group && c[0].name == "Team", "chats event skips entries without jid") } else { check(false, "chats event parsed") }
+        if case .closed(let r, let lo)? = WAProtocol.parse(#"{"type":"closed","reason":"logged out","loggedOut":true}"#) { check(lo && r == "logged out", "closed event") } else { check(false, "closed event parsed") }
+        check(WAProtocol.parse("garbage") == nil && WAProtocol.parse(#"{"type":"nope"}"#) == nil && WAProtocol.parse(#"{"type":"message"}"#) == nil, "broken lines are ignored")
+        check(WAProtocol.number("49151234@s.whatsapp.net") == "+49151234" && WAProtocol.number("49151234:12@s.whatsapp.net") == "+49151234" && WAProtocol.number("x@g.us") == "x@g.us", "jid to number")
+        check(String(decoding: WAProtocol.command(["cmd": "send"]), as: UTF8.self) == "{\"cmd\":\"send\"}\n", "commands are one JSON line")
+
+        // contacts and incoming messages
+        let st = Store.shared
+        let one = Contact(name: "Anna", uin: "wa1", bridge: "wa:49151234@s.whatsapp.net"), grp = Contact(name: "Crew", uin: "wa2", bridge: "wa:123@g.us")
+        st.contacts += [one, grp]; st.waEnabled = true; st.status = .online
+        check(one.isWA && one.isLive && !one.isIM && !one.isGroup && grp.isGroup && grp.isWA && one.callTarget == "+49151234" && one.mailAddr == nil && grp.callTarget == nil, "WhatsApp contact kinds")
+        func msg(_ jid: String, _ text: String, group: Bool = false, name: String = "", fromMe: Bool = false) -> WAMessage { WAMessage(id: UUID().uuidString, jid: jid, from: "49157@s.whatsapp.net", name: name, text: text, group: group, date: Date(), fromMe: fromMe, files: []) }
+        st.waIncoming(msg("49151234@s.whatsapp.net", "hello"))
+        check(st.history["wa1"]?.last?.text == "hello" && st.history["wa1"]?.last?.dir == "in" && st.unread["wa1"]?.count == 1, "WhatsApp message lands in its chat")
+        st.waIncoming(msg("123@g.us", "party?", group: true, name: "Bob"))
+        check(st.history["wa2"]?.last?.text == "Bob: party?", "group message gets the sender name")
+        st.waIncoming(msg("999@s.whatsapp.net", "stranger"))
+        check(st.history.values.allSatisfy { $0.allSatisfy { $0.text != "stranger" } }, "chats that were not imported are ignored")
+        st.log("wa1", "out", "on my way"); let n = st.history["wa1"]!.count
+        st.waIncoming(msg("49151234@s.whatsapp.net", "on my way", fromMe: true))
+        check(st.history["wa1"]!.count == n, "echo of my own send is not logged twice")
+        st.waIncoming(msg("49151234@s.whatsapp.net", "typed on my phone", fromMe: true))
+        check(st.history["wa1"]?.last?.text == "typed on my phone" && st.history["wa1"]?.last?.dir == "out", "message written on another device goes to the history")
+        st.waEnabled = false; st.waIncoming(msg("49151234@s.whatsapp.net", "while off")); check(st.history["wa1"]?.last?.text != "while off", "nothing arrives while WhatsApp is off")
+        st.contacts.removeAll { $0.uin == "wa1" || $0.uin == "wa2" }; st.history["wa1"] = nil; st.history["wa2"] = nil; st.unread["wa1"] = nil; st.unread["wa2"] = nil
+
+        // the real helper in --selftest mode (needs Node: ICQ_WA_NODE or a Node on this Mac)
+        let nodePath = ProcessInfo.processInfo.environment["ICQ_WA_NODE"] ?? ["/opt/homebrew/bin/node", "/usr/local/bin/node"].first { FileManager.default.isExecutableFile(atPath: $0) }
+        if let nodePath, WABridge.scriptURL != nil {
+            setenv("ICQ_WA_NODE", nodePath, 1)
+            let b = WABridge.shared; b.extraArgs = ["--selftest"]; b.start()
+            let end = Date().addingTimeInterval(10)
+            while Date() < end, !b.events.contains(where: { if case .closed = $0 { return true }; return false }) { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
+            func has(_ f: (WAEvent) -> Bool) -> Bool { b.events.contains(where: f) }
+            check(has { if case .qr = $0 { return true }; return false } && has { if case .ready = $0 { return true }; return false }, "helper selftest: qr and ready")
+            check(b.events.filter { if case .message = $0 { return true }; return false }.count == 2, "helper selftest: two messages")
+            check(has { if case .message(let m) = $0 { return !m.files.isEmpty }; return false }, "helper selftest: message with a file")
+            b.stop(); b.extraArgs = []; b.events = []
+        } else { print("note: WhatsApp helper run skipped (no Node found or helper not bundled)") }
+
+        // Node.js download (network, about 45 MB): only with ICQ_SELFTEST_NET=1
+        if ProcessInfo.processInfo.environment["ICQ_SELFTEST_NET"] != nil {
+            unsetenv("ICQ_WA_NODE")
+            var done = false, failure = ""
+            Task { do { try await WABridge.fetchNode() } catch { failure = "\(error)" }; done = true }
+            let end = Date().addingTimeInterval(240); while !done, Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
+            check(done && failure.isEmpty && WABridge.nodeInstalled, "Node.js download, checksum and unpacking: \(failure)")
+            if WABridge.nodeInstalled {
+                let p = Process(); p.executableURL = WABridge.nodeURL; p.arguments = ["--version"]; let o = Pipe(); p.standardOutput = o; try? p.run(); p.waitUntilExit()
+                check(String(decoding: o.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).hasPrefix("v22."), "downloaded Node.js runs and is v22")
+            }
+        }
+        // GIF -> MP4
+        let gif = FileManager.default.temporaryDirectory.appendingPathComponent("selftest.gif"), mp4 = FileManager.default.temporaryDirectory.appendingPathComponent("selftest.mp4")
+        if let dest = CGImageDestinationCreateWithURL(gif as CFURL, UTType.gif.identifier as CFString, 3, nil) {
+            CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+            for c in [NSColor.red, .green, .blue] {
+                let ctx = CGContext(data: nil, width: 40, height: 30, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                ctx.setFillColor(c.cgColor); ctx.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+                CGImageDestinationAddImage(dest, ctx.makeImage()!, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.2]] as CFDictionary)
+            }
+            check(CGImageDestinationFinalize(dest), "test GIF written")
+            do { try GifConverter.mp4(from: gif, to: mp4); let d = AVURLAsset(url: mp4).duration.seconds; check(d > 0.4 && d < 1.0, "GIF converted to a video of the right length: \(d)s") }
+            catch { check(false, "GIF conversion: \(error)") }
+        }
     }
 
     static func autoReply() {

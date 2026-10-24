@@ -30,13 +30,18 @@ struct Contact: Identifiable, Codable, Hashable {
     var autoReply: Bool? = nil     // may get an automatic away reply (needs Auto-reply on in Preferences > Bridge)
     var isLive: Bool { bridge != nil }
     /// An iMessage group chat (bridge = "group:<chat guid>").
-    var isGroup: Bool { bridge?.hasPrefix("group:") == true }
+    var isGroup: Bool { bridge?.hasPrefix("group:") == true || (isWA && (waJid ?? "").hasSuffix("@g.us")) }
+    /// A WhatsApp chat (bridge = "wa:<jid>") reached through the experimental WhatsApp helper.
+    var isWA: Bool { bridge?.hasPrefix("wa:") == true }
+    var waJid: String? { isWA ? String(bridge!.dropFirst(3)) : nil }
+    /// An iMessage contact or group (everything live that is not WhatsApp).
+    var isIM: Bool { bridge != nil && !isWA }
     /// A made-up sample friend (neither an AI chatbot nor an iMessage contact): can be hidden in Preferences.
     var isDemo: Bool { persona == nil && bridge == nil }
     /// Address for "Send Mail": the e-mail field, or the iMessage handle when that is an e-mail address.
-    var mailAddr: String? { if let e = email, !e.isEmpty { return e }; if let b = bridge, !isGroup, b.contains("@") { return b }; return nil }
+    var mailAddr: String? { if let e = email, !e.isEmpty { return e }; if let b = bridge, !isGroup, !isWA, b.contains("@") { return b }; return nil }
     /// Number / address for FaceTime: the phone field, or the iMessage handle.
-    var callTarget: String? { if isGroup { return nil }; if let p = phone, !p.isEmpty { return p }; return bridge }
+    var callTarget: String? { if isGroup { return nil }; if let p = phone, !p.isEmpty { return p }; if let j = waJid { return j.hasSuffix("@s.whatsapp.net") ? WAProtocol.number(j) : nil }; return bridge }
     var id: String { uin }
     var isBot: Bool { persona != nil }
     var isAssistant: Bool { assistant ?? false }
@@ -94,6 +99,7 @@ private struct Saved: Codable {
     var hideDemo: Bool? = nil, aiDraftIMessage: Bool? = nil, bridgeAutoAdd: Bool? = nil
     var showGroups: Bool? = nil, showReceipts: Bool? = nil
     var awayTexts: [String: String]? = nil
+    var waEnabled: Bool? = nil
     var aiLocal: Bool? = nil, aiSummary: Bool? = nil, autoReplyOn: Bool? = nil, autoReplyText: String? = nil, autoReplyAI: Bool? = nil, autoReplied: [String: Double]? = nil
 }
 
@@ -179,6 +185,7 @@ final class Store: ObservableObject {
     static let defaultAway = ["away": "I'm away from my computer right now.", "na": "I'm not available. Please leave a message.", "occupied": "I'm busy right now – urgent messages only.",
                               "dnd": "Please do not disturb.", "ffc": "I'm free for a chat!"]
     func awayText(_ st: Status) -> String { awayTexts[st.rawValue] ?? Store.defaultAway[st.rawValue] ?? "" }
+    @Published var waEnabled = false         // experimental WhatsApp helper (Preferences > Privacy)
     @Published var showGroups = false        // group chats can be imported and are shown (off by default)
     @Published var showReceipts = true       // "delivered / read" under my last message
     @Published var receipts: [String: String] = [:]
@@ -245,7 +252,7 @@ final class Store: ObservableObject {
             aiEnabled = s.aiEnabled; history = s.history; apiModel = s.apiModel ?? "claude-haiku-5-5"; aiProvider = AIProvider(rawValue: s.aiProvider ?? "") ?? .anthropic; aiModels = s.aiModels ?? [:]; AIChat.provider = aiProvider; simpleMode = s.simpleMode ?? false
             botInit = s.botInit ?? true; botMin = s.botMin ?? 5; botMax = s.botMax ?? 20; opts = s.opts ?? MainOpts(); appName = s.appName ?? "ICQuel"; bridgeEnabled = s.bridgeEnabled ?? false; bridgeLast = s.bridgeLast ?? 0
             autoAway = s.autoAway ?? false; autoAwayMin = s.autoAwayMin ?? 15; autoAwayDND = s.autoAwayDND ?? false
-            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false; showGroups = s.showGroups ?? false; awayTexts = s.awayTexts ?? [:]; showReceipts = s.showReceipts ?? true
+            hideDemo = s.hideDemo ?? false; aiDraftIMessage = s.aiDraftIMessage ?? false; bridgeAutoAdd = s.bridgeAutoAdd ?? false; showGroups = s.showGroups ?? false; awayTexts = s.awayTexts ?? [:]; waEnabled = s.waEnabled ?? false; showReceipts = s.showReceipts ?? true
             aiLocal = s.aiLocal ?? false; aiSummary = s.aiSummary ?? false; autoReplyOn = s.autoReplyOn ?? false; autoReplyAI = s.autoReplyAI ?? false
             if let t = s.autoReplyText, !t.isEmpty { autoReplyText = t }; autoReplied = s.autoReplied ?? [:]
             AIChat.useLocal = aiLocal
@@ -266,7 +273,7 @@ final class Store: ObservableObject {
     }
     func save() {
         let s = Saved(uin: uin, nick: nick, status: status, sounds: sounds, contacts: contacts, freqEnabled: freqEnabled,
-                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, showGroups: showGroups, showReceipts: showReceipts, awayTexts: awayTexts, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
+                      freqMode: freqMode, minutes: minutes, demoFirst: demoFirst, aiEnabled: aiEnabled, history: history, apiModel: apiModel, aiProvider: aiProvider.rawValue, aiModels: aiModels, simpleMode: simpleMode, botInit: botInit, botMin: botMin, botMax: botMax, opts: opts, appName: appName, bridgeEnabled: bridgeEnabled, bridgeLast: bridgeLast, autoAway: autoAway, autoAwayMin: autoAwayMin, autoAwayDND: autoAwayDND, hideDemo: hideDemo, aiDraftIMessage: aiDraftIMessage, bridgeAutoAdd: bridgeAutoAdd, showGroups: showGroups, showReceipts: showReceipts, awayTexts: awayTexts, waEnabled: waEnabled, aiLocal: aiLocal, aiSummary: aiSummary, autoReplyOn: autoReplyOn, autoReplyText: autoReplyText, autoReplyAI: autoReplyAI, autoReplied: autoReplied)
         if let d = try? JSONEncoder().encode(s) { Persist.write(d) }
     }
     static func newUin() -> String { String(Int.random(in: 10_000_000...99_999_999)) }
@@ -364,12 +371,23 @@ final class Store: ObservableObject {
     /// Sends the waiting attachments of a contact: real iMessage contacts through Messages, everyone else just gets a log line.
     func sendAttachments(_ uin: String) {
         guard let files = attachments.removeValue(forKey: uin), !files.isEmpty else { return }
-        if let c = contact(uin), let h = c.bridge {
+        if let c = contact(uin), let j = c.waJid {
+            guard waEnabled, status != .offline else { return }
+            for f in files { WABridge.shared.sendFile(f, to: j) { err in DispatchQueue.main.async { if let err { notice("WhatsApp could not send \(f.lastPathComponent):\n\(err)") } else { self.log(uin, "out", "", files: [f.path]) } } } }
+        } else if let c = contact(uin), let h = c.bridge {
             guard bridgeEnabled, status != .offline else { return }
             for f in files { Bridge.sendFile(f, to: h) { err in DispatchQueue.main.async { if let err { notice("Messages could not send \(f.lastPathComponent):\n\(err)") } else { self.log(uin, "out", "", files: [f.path]) } } } }
         } else { for f in files { log(uin, "out", "", files: [f.path]) } }
     }
     func botReply(_ uin: String) {
+        if let c = contact(uin), let j = c.waJid {         // a WhatsApp chat: hand the message to the helper, never auto-answer
+            guard waEnabled else { notice("WhatsApp is off.\nTurn it on in Preferences > Privacy."); return }
+            guard status != .offline else { notice("You are offline."); return }
+            guard let last = history[uin]?.last, last.dir == "out" else { return }
+            aiDrafts[uin] = nil
+            WABridge.shared.send(last.text, to: j) { err in if let err { DispatchQueue.main.async { notice("WhatsApp could not send this message:\n\(err)") } } }
+            return
+        }
         if let c = contact(uin), let h = c.bridge {       // a real iMessage contact: hand the message to Messages, never auto-answer
             guard bridgeEnabled else { notice("The Messages bridge is off.\nTurn it on in Preferences > Bridge."); return }
             guard status != .offline else { notice("You are offline."); return }
@@ -424,11 +442,11 @@ final class Store: ObservableObject {
         polling = true; let after = bridgeLast
         let pending = contacts.compactMap { c -> (String, String, Int)? in
             // Messages marks a message read within seconds when its window is open: only messages that have been shown here for 2 minutes are synced
-            guard let h = c.bridge, let q = unread[c.uin], !q.isEmpty, q.allSatisfy({ Date().timeIntervalSince($0.t) > 120 }) else { return nil }; return (c.uin, h, q.count)
+            guard let h = c.bridge, c.isIM, !c.isGroup, let q = unread[c.uin], !q.isEmpty, q.allSatisfy({ Date().timeIntervalSince($0.t) > 120 }) else { return nil }; return (c.uin, h, q.count)
         }
         // 1:1 chats whose newest message is mine: look up delivered / read
         let wantReceipts = showReceipts ? contacts.compactMap { c -> (String, String)? in
-            guard let h = c.bridge, !c.isGroup, history[c.uin]?.last?.dir == "out" else { return nil }; return (c.uin, h) } : []
+            guard let h = c.bridge, c.isIM, !c.isGroup, history[c.uin]?.last?.dir == "out" else { return nil }; return (c.uin, h) } : []
         DispatchQueue.global(qos: .utility).async {
             let msgs = Bridge.incoming(after: after)
             let states = pending.map { ($0.0, Bridge.unreadAmongLatest(handle: $0.1, n: $0.2)) }
@@ -449,7 +467,7 @@ final class Store: ObservableObject {
                         self.deliver(to: gc, text: self.groupText(m.handle, m.text, mine: false), files: m.files.isEmpty ? nil : m.files)
                         continue
                     }
-                    var contact = self.contacts.first(where: { !$0.isGroup && ($0.bridge.map { Bridge.same($0, m.handle) } ?? false) })
+                    var contact = self.contacts.first(where: { $0.isIM && !$0.isGroup && ($0.bridge.map { Bridge.same($0, m.handle) } ?? false) })
                     if contact == nil, self.bridgeAutoAdd, m.imessage, !m.group, !m.handle.isEmpty {   // a new sender: create the contact (named from your Contacts if possible)
                         contact = self.addBridgeContact(m.handle, handle: m.handle, importRecent: false)
                         if let c = contact { self.nameFromContacts(c) }
@@ -534,7 +552,7 @@ final class Store: ObservableObject {
     }
     /// Contacts that carry their phone number / address as name get the real name from the Contacts app.
     func nameFromContacts(_ c: Contact) {
-        guard let h = c.bridge else { return }
+        guard let h = c.bridge, c.isIM, !c.isGroup else { return }
         Bridge.names(for: [h]) { n in DispatchQueue.main.async {
             if let nm = n[h], let i = self.contacts.firstIndex(where: { $0.uin == c.uin }), self.contacts[i].name == h { self.contacts[i].name = nm; self.save() }
         } }
@@ -552,10 +570,27 @@ final class Store: ObservableObject {
         return c
     }
 
+    /// A message from the WhatsApp helper: only chats you imported are shown; everything else is dropped.
+    func waIncoming(_ m: WAMessage) {
+        guard waEnabled, let c = contacts.first(where: { $0.bridge == "wa:" + m.jid }) else { return }
+        if m.fromMe {   // written on another device: only the history gets it (our own sends are logged when they are made)
+            if history[c.uin]?.last(where: { $0.dir == "out" }).map({ $0.text == m.text && Date().timeIntervalSince($0.t) < 60 }) == true { return }
+            log(c.uin, "out", m.text, m.date, files: m.files.isEmpty ? nil : m.files); return
+        }
+        let who = m.name.isEmpty ? WAProtocol.number(m.from.contains("@") ? m.from : m.from + "@s.whatsapp.net") : m.name
+        let text = m.group ? (m.text.isEmpty ? "" : who + ": " + m.text) : m.text
+        deliver(to: c, text: text, files: m.files.isEmpty ? nil : m.files)
+    }
     /// An explicit user action (Forward, Request Chat): writes `text` (and files) to a contact like the send window does.
     func sendText(to uin: String, _ text: String, files: [String] = []) {
         if !text.isEmpty { log(uin, "out", text); Sound.play("msgsent"); botReply(uin) }
         if !files.isEmpty { attachments[uin] = files.map { URL(fileURLWithPath: $0) }; sendAttachments(uin) }
+    }
+    @discardableResult func addWAContact(_ name: String, jid: String) -> Contact? {
+        let key = "wa:" + jid
+        guard !contacts.contains(where: { $0.bridge == key }) else { return nil }
+        let c = Contact(name: name, uin: Store.newUin(), bridge: key)
+        contacts.append(c); online.insert(c.uin); save(); return c
     }
     /// A group chat as a contact (bridge = "group:<guid>"); the last 5 messages are loaded, incoming ones prefixed with the sender.
     @discardableResult func addGroupContact(_ name: String, guid: String) -> Contact? {
@@ -575,7 +610,7 @@ final class Store: ObservableObject {
     /// "Sender: text" for group messages (sender named from the contact list, else the handle).
     func groupText(_ handle: String, _ text: String, mine: Bool) -> String {
         if mine || handle.isEmpty { return text }
-        let who = contacts.first(where: { !$0.isGroup && ($0.bridge.map { Bridge.same($0, handle) } ?? false) })?.name ?? handle
+        let who = contacts.first(where: { $0.isIM && !$0.isGroup && ($0.bridge.map { Bridge.same($0, handle) } ?? false) })?.name ?? handle
         return text.isEmpty ? "" : who + ": " + text
     }
 

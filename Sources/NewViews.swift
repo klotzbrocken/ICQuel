@@ -117,7 +117,7 @@ struct SendView: View {
             ZStack(alignment: .topLeading) {
                 etched("To:", R(0, 0, W, 44))
                 if c.isLive {   // iMessage contact: the phone number / address instead of the ICQ number
-                    lbl("iMessage:", R(8, 20, 52, 14), bold: true); val(c.bridge ?? "", R(62, 17, 104, 18))
+                    lbl(c.isWA ? "WhatsApp:" : "iMessage:", R(8, 20, 52, 14), bold: true); val(c.waJid.map(WAProtocol.number) ?? c.bridge ?? "", R(62, 17, 104, 18))
                     lbl("Nick:", R(172, 20, 28, 14), bold: true); val(c.name, R(202, 17, max(30, W - 202 - 30), 18))
                 } else {
                     lbl("ICQ#:", R(8, 20, 34, 14), bold: true); val(c.uin, R(42, 17, 66, 18))
@@ -171,7 +171,7 @@ struct IncomingView: View {
                 lbl("EMail:", R(158, 17, 36, 14), bold: true); val(c.mailAddr ?? "", R(196, 14, max(30, W - 196 - 28), 18))
                 IconBtn(name: "m_email", w: 20, h: 22) { ICQ.mail(c) }.offset(x: W - 24, y: 12)
                 if c.isLive {   // iMessage contact: the phone number / address instead of the ICQ number
-                    lbl("iMessage:", R(6, 42, 52, 14), bold: true); val(c.bridge ?? "", R(60, 38, 100, 18))
+                    lbl(c.isWA ? "WhatsApp:" : "iMessage:", R(6, 42, 52, 14), bold: true); val(c.waJid.map(WAProtocol.number) ?? c.bridge ?? "", R(60, 38, 100, 18))
                     lbl("Date:", R(166, 42, 30, 14), bold: true); val(m.map { msgDate($0.t) } ?? "", R(198, 38, 54, 18))
                     lbl("Time:", R(256, 42, 30, 14), bold: true); val(m.map { msgTime($0.t) } ?? "", R(288, 38, max(36, W - 288 - 4), 18))
                 } else {

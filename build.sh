@@ -14,6 +14,11 @@ mkdir -p $APP/Contents/Frameworks && ditto Vendor/Sparkle/Sparkle.framework $APP
 cp -R assets-own/img $APP/Contents/Resources/img
 cp -R assets-own/sounds $APP/Contents/Resources/sounds
 cp Vendor/Sparkle/LICENSE $APP/Contents/Resources/Sparkle-LICENSE.txt   # MIT licence of the bundled Sparkle framework
+# WhatsApp helper: Node + Baileys bundled into one file (Node itself is downloaded by the app on demand, see Sources/WhatsApp.swift)
+WAOUT=$(mktemp -d)
+if NO_NODE=1 tools/build_wa_bridge.sh "$WAOUT" >/dev/null 2>&1; then mkdir -p $APP/Contents/Resources/wa && cp "$WAOUT/bridge.js" $APP/Contents/Resources/wa/bridge.js
+else echo "warning: WhatsApp helper not built (needs npm and a network connection once)" >&2; fi
+rm -rf "$WAOUT"
 cp assets-own/icon.png $APP/Contents/Resources/icon.png   # shown as the Dock icon (large, cut out)
 # app icon (own artwork, tools/gen_assets.py)
 /usr/bin/python3 - <<'E'
